@@ -9,6 +9,8 @@ interface AccountingConfig {
     expenseEmoji: string;
     journalsPath: string;
     defaultCategory?: string; // 默认分类关键词
+    enableQuickCopy?: boolean; // 启用快速记账功能
+    quickCopyDays?: number; // 快速记账显示最近N天的记录
     budgets?: {
         monthly: {
             total: number;
@@ -1901,6 +1903,364 @@ class QuickEntryModal extends Modal {
     }
 }
 
+// 快速记账模态框（复制历史记录）
+class QuickCopyModal extends Modal {
+    plugin: any;
+    records: AccountingRecord[];
+    filteredRecords: AccountingRecord[];
+    searchInput: HTMLInputElement;
+    recordsContainer: HTMLElement;
+    selectedCategory: string;
+    onSave: () => Promise<void>;
+
+    constructor(app: any, plugin: any, records: AccountingRecord[], onSave: () => Promise<void>) {
+        super(app);
+        this.plugin = plugin;
+        this.records = records;
+        this.filteredRecords = records;
+        this.selectedCategory = '';
+        this.onSave = onSave;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.addClass('quick-copy-modal');
+
+        this.titleEl.setText('📋 快速记账');
+
+        // 搜索和筛选区域
+        const filterSection = contentEl.createDiv('quick-copy-filter');
+
+        // 搜索框
+        this.searchInput = filterSection.createEl('input', {
+            type: 'text',
+            cls: 'quick-copy-search',
+            attr: { placeholder: '搜索记录...' }
+        });
+        this.searchInput.addEventListener('input', () => this.filterRecords());
+
+        // 分类筛选
+        const categorySelect = filterSection.createEl('select', { cls: 'quick-copy-category-select' });
+        categorySelect.createEl('option', { text: '全部分类', value: '' });
+        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]) => {
+            categorySelect.createEl('option', { text: categoryName, value: keyword });
+        });
+        categorySelect.addEventListener('change', () => {
+            this.selectedCategory = categorySelect.value;
+            this.filterRecords();
+        });
+
+        // 记录列表容器
+        this.recordsContainer = contentEl.createDiv('quick-copy-records');
+        this.renderRecords();
+
+        // 底部提示
+        const footer = contentEl.createDiv('quick-copy-footer');
+        footer.createEl('span', { text: `共 ${this.records.length} 条记录`, cls: 'quick-copy-count' });
+    }
+
+    filterRecords() {
+        const searchText = this.searchInput.value.toLowerCase().trim();
+
+        this.filteredRecords = this.records.filter(record => {
+            const matchSearch = !searchText ||
+                record.description.toLowerCase().includes(searchText) ||
+                record.category.toLowerCase().includes(searchText) ||
+                record.keyword.toLowerCase().includes(searchText);
+
+            const matchCategory = !this.selectedCategory ||
+                record.keyword === this.selectedCategory;
+
+            return matchSearch && matchCategory;
+        });
+
+        this.renderRecords();
+    }
+
+    renderRecords() {
+        this.recordsContainer.empty();
+
+        if (this.filteredRecords.length === 0) {
+            this.recordsContainer.createDiv({ text: '暂无匹配记录', cls: 'quick-copy-empty' });
+            return;
+        }
+
+        this.filteredRecords.forEach(record => {
+            const recordItem = this.recordsContainer.createDiv('quick-copy-item');
+
+            // 记录信息
+            const recordInfo = recordItem.createDiv('quick-copy-info');
+            const categoryColor = this.getCategoryColor(record.category);
+            recordInfo.createEl('span', {
+                text: record.category,
+                cls: 'quick-copy-category',
+                attr: { style: `background-color: ${categoryColor}20; color: ${categoryColor}` }
+            });
+            recordInfo.createEl('span', {
+                text: `¥${record.amount}`,
+                cls: 'quick-copy-amount'
+            });
+            recordInfo.createEl('span', {
+                text: record.description || '-',
+                cls: 'quick-copy-desc'
+            });
+
+            // 操作按钮
+            const actions = recordItem.createDiv('quick-copy-actions');
+
+            const copyBtn = actions.createEl('button', {
+                text: '复制',
+                cls: 'quick-copy-btn'
+            });
+            copyBtn.onclick = () => this.copyRecord(record);
+
+            const editBtn = actions.createEl('button', {
+                text: '编辑',
+                cls: 'quick-copy-btn quick-copy-btn-edit'
+            });
+            editBtn.onclick = () => this.editAndCopyRecord(record);
+        });
+    }
+
+    getCategoryColor(category: string): string {
+        const colors: Record<string, string> = {
+            '餐饮': '#dc3545',
+            '交通': '#007bff',
+            '娱乐': '#6f42c1',
+            '购物': '#fd7e14',
+            '医疗': '#20c997',
+            '教育': '#198754',
+            '房租': '#6c757d',
+            '其他': '#495057',
+            '收入': '#28a745',
+            '投资': '#17a2b8',
+            '礼物': '#e83e8c',
+            '旅游': '#ffc107',
+            '运动': '#fd7e14',
+            '贷款': '#6c757d',
+            '生活缴费': '#17a2b8'
+        };
+        return colors[category] || '#6c757d';
+    }
+
+    async copyRecord(record: AccountingRecord) {
+        const emoji = this.plugin.config.expenseEmoji;
+        const recordLine = `- ${emoji}${record.keyword} ${record.amount}${record.description ? ' ' + record.description : ''}`;
+
+        try {
+            await this.appendRecordToJournal(recordLine);
+            new Notice('复制成功');
+            this.close();
+
+            // 跳转到今天的日记
+            await this.openJournalFileIfNotOpen(formatLocalDate(new Date()));
+
+            if (this.onSave) {
+                await this.onSave();
+            }
+        } catch (error) {
+            console.error('复制记录失败:', error);
+            new Notice('复制失败');
+        }
+    }
+
+    editAndCopyRecord(record: AccountingRecord) {
+        new EditCopyModal(this.app, this.plugin, record, async () => {
+            this.close();
+            await this.openJournalFileIfNotOpen(formatLocalDate(new Date()));
+            if (this.onSave) {
+                await this.onSave();
+            }
+        }).open();
+    }
+
+    async appendRecordToJournal(recordLine: string) {
+        const today = formatLocalDate(new Date());
+        const journalPath = `${this.plugin.config.journalsPath}/${today}.md`;
+        const file = this.app.vault.getAbstractFileByPath(journalPath);
+
+        if (file instanceof TFile) {
+            let content = await this.app.vault.read(file);
+            const lines = content.split('\n');
+
+            // 移除末尾的空行或仅含 "-" 的占位行
+            while (lines.length > 0 && (lines[lines.length - 1].trim() === '' || lines[lines.length - 1].trim() === '-')) {
+                lines.pop();
+            }
+
+            let newContent = lines.join('\n');
+            if (newContent.length > 0) {
+                newContent += '\n' + recordLine;
+            } else {
+                newContent = recordLine;
+            }
+
+            await this.app.vault.modify(file, newContent);
+        } else {
+            await this.app.vault.create(journalPath, recordLine);
+        }
+    }
+
+    async openJournalFileIfNotOpen(date: string) {
+        const filePath = `${this.plugin.config.journalsPath}/${date}.md`;
+        const file = this.app.vault.getAbstractFileByPath(filePath);
+
+        if (!(file instanceof TFile)) {
+            new Notice('日记文件不存在');
+            return;
+        }
+
+        // 检查是否已经打开
+        const leaves = this.app.workspace.getLeavesOfType('markdown');
+        const existingLeaf = leaves.find(leaf =>
+            leaf.view?.file?.path === filePath
+        );
+
+        if (existingLeaf) {
+            // 已打开 → 聚焦到该 tab
+            this.app.workspace.setActiveLeaf(existingLeaf);
+        } else {
+            // 未打开 → 新打开
+            const leaf = this.app.workspace.getLeaf();
+            await leaf.openFile(file);
+        }
+    }
+}
+
+// 编辑后复制模态框
+class EditCopyModal extends Modal {
+    plugin: any;
+    record: AccountingRecord;
+    amountInput: HTMLInputElement;
+    descInput: HTMLInputElement;
+    onSave: () => Promise<void>;
+
+    constructor(app: any, plugin: any, record: AccountingRecord, onSave: () => Promise<void>) {
+        super(app);
+        this.plugin = plugin;
+        this.record = record;
+        this.onSave = onSave;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.addClass('edit-copy-modal');
+
+        this.titleEl.setText('编辑后复制');
+
+        // 分类显示
+        const categorySection = contentEl.createDiv('edit-copy-section');
+        categorySection.createEl('label', { text: '分类', cls: 'edit-copy-label' });
+        categorySection.createEl('span', {
+            text: this.record.category,
+            cls: 'edit-copy-category-display'
+        });
+
+        // 金额输入
+        const amountSection = contentEl.createDiv('edit-copy-section');
+        amountSection.createEl('label', { text: '金额', cls: 'edit-copy-label' });
+        this.amountInput = amountSection.createEl('input', {
+            type: 'number',
+            cls: 'edit-copy-input',
+            attr: {
+                value: this.record.amount,
+                step: '0.01',
+                min: '0'
+            }
+        });
+
+        // 描述输入
+        const descSection = contentEl.createDiv('edit-copy-section');
+        descSection.createEl('label', { text: '描述', cls: 'edit-copy-label' });
+        this.descInput = descSection.createEl('input', {
+            type: 'text',
+            cls: 'edit-copy-input',
+            attr: {
+                value: this.record.description,
+                placeholder: '输入描述...'
+            }
+        });
+
+        // 按钮
+        const buttons = contentEl.createDiv('edit-copy-buttons');
+        const saveBtn = buttons.createEl('button', {
+            text: '复制',
+            cls: 'edit-copy-btn edit-copy-btn-save'
+        });
+        saveBtn.onclick = () => this.saveAndCopy();
+
+        const cancelBtn = buttons.createEl('button', {
+            text: '取消',
+            cls: 'edit-copy-btn edit-copy-btn-cancel'
+        });
+        cancelBtn.onclick = () => this.close();
+
+        // 回车保存
+        this.amountInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') this.saveAndCopy();
+        });
+        this.descInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') this.saveAndCopy();
+        });
+
+        setTimeout(() => this.amountInput.focus(), 100);
+    }
+
+    async saveAndCopy() {
+        const amount = parseFloat(this.amountInput.value);
+        const description = this.descInput.value.trim();
+
+        if (!amount || amount <= 0) {
+            new Notice('请输入有效金额');
+            return;
+        }
+
+        const emoji = this.plugin.config.expenseEmoji;
+        const recordLine = `- ${emoji}${this.record.keyword} ${amount}${description ? ' ' + description : ''}`;
+
+        try {
+            await this.appendRecordToJournal(recordLine);
+            new Notice('复制成功');
+            this.close();
+
+            if (this.onSave) {
+                await this.onSave();
+            }
+        } catch (error) {
+            console.error('复制记录失败:', error);
+            new Notice('复制失败');
+        }
+    }
+
+    async appendRecordToJournal(recordLine: string) {
+        const today = formatLocalDate(new Date());
+        const journalPath = `${this.plugin.config.journalsPath}/${today}.md`;
+        const file = this.app.vault.getAbstractFileByPath(journalPath);
+
+        if (file instanceof TFile) {
+            let content = await this.app.vault.read(file);
+            const lines = content.split('\n');
+
+            while (lines.length > 0 && (lines[lines.length - 1].trim() === '' || lines[lines.length - 1].trim() === '-')) {
+                lines.pop();
+            }
+
+            let newContent = lines.join('\n');
+            if (newContent.length > 0) {
+                newContent += '\n' + recordLine;
+            } else {
+                newContent = recordLine;
+            }
+
+            await this.app.vault.modify(file, newContent);
+        } else {
+            await this.app.vault.create(journalPath, recordLine);
+        }
+    }
+}
+
 // 记账视图
 const ACCOUNTING_VIEW = 'accounting-view';
 
@@ -1959,19 +2319,28 @@ class AccountingView extends ItemView {
 
     renderHeader(container) {
         const header = container.createDiv('accounting-header');
-        
+
         // 使用配置的应用名称
         const appName = this.plugin.config.appName || '每日记账';
         header.createEl('h2', { text: `💰 ${appName}`, cls: 'accounting-title' });
-        
+
         const actions = header.createDiv('accounting-actions');
-        
+
         const quickEntryBtn = actions.createEl('button', {
             text: '快速记账',
             cls: 'accounting-btn accounting-btn-primary'
         });
         quickEntryBtn.onclick = () => this.showQuickEntryModal();
-        
+
+        // 快速复制按钮（根据配置显示）
+        if (this.plugin.config.enableQuickCopy !== false) {
+            const quickCopyBtn = actions.createEl('button', {
+                text: '快速复制',
+                cls: 'accounting-btn accounting-btn-primary'
+            });
+            quickCopyBtn.onclick = () => this.showQuickCopyModal();
+        }
+
         const refreshBtn = actions.createEl('button', {
             text: '刷新数据',
             cls: 'accounting-btn'
@@ -2549,7 +2918,50 @@ class AccountingView extends ItemView {
             await this.loadAllRecords(true);
         }).open();
     }
-    
+
+    showQuickCopyModal() {
+        // 获取最近N天的记录（去重）
+        const days = this.plugin.config.quickCopyDays || 14;
+        const recentRecords = this.getRecentUniqueRecords(days);
+
+        if (recentRecords.length === 0) {
+            new Notice('暂无最近记账记录');
+            return;
+        }
+
+        new QuickCopyModal(this.app, this.plugin, recentRecords, async () => {
+            // 保存后的回调：刷新数据
+            await this.loadAllRecords(true);
+        }).open();
+    }
+
+    getRecentUniqueRecords(days: number): AccountingRecord[] {
+        const now = new Date();
+        const startDate = new Date(now);
+        startDate.setDate(startDate.getDate() - days);
+        const startStr = formatLocalDate(startDate);
+
+        // 筛选最近N天的记录
+        const recentRecords = this.currentRecords.filter(r => r.date >= startStr);
+
+        // 去重：相同关键词+金额+描述只保留一条
+        const seen = new Set<string>();
+        const uniqueRecords: AccountingRecord[] = [];
+
+        for (const record of recentRecords) {
+            const key = `${record.keyword}|${record.amount}|${record.description}`;
+            if (!seen.has(key)) {
+                seen.add(key);
+                uniqueRecords.push(record);
+            }
+        }
+
+        // 按最近使用时间排序
+        uniqueRecords.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+        return uniqueRecords;
+    }
+
     showExportPDFModal() {
         if (this.filteredRecords.length === 0) {
             new Notice('当前时间范围内没有记账记录');
@@ -2690,6 +3102,13 @@ export default class AccountingPlugin extends Plugin {
             this.activateView();
         });
 
+        // 快速记账侧边栏图标（根据配置显示）
+        if (this.config.enableQuickCopy !== false) {
+            this.addRibbonIcon('copy', '快速记账', () => {
+                this.openQuickCopy();
+            });
+        }
+
         // 添加命令
         this.addCommand({
             id: 'open-accounting',
@@ -2705,10 +3124,20 @@ export default class AccountingPlugin extends Plugin {
 
         this.addCommand({
             id: 'quick-entry',
-            name: '快速记账',
+            name: '新建记账',
             icon: 'wallet',
             callback: () => this.openQuickEntry()
         });
+
+        // 快速记账命令（根据配置注册）
+        if (this.config.enableQuickCopy !== false) {
+            this.addCommand({
+                id: 'quick-copy',
+                name: '快速记账',
+                icon: 'copy',
+                callback: () => this.openQuickCopy()
+            });
+        }
 
         this.addCommand({
             id: 'export-pdf',
@@ -2785,7 +3214,9 @@ export default class AccountingPlugin extends Plugin {
             },
             defaultCategory: "cy", // 默认分类为餐饮
             expenseEmoji: "#",
-            journalsPath: "journals"
+            journalsPath: "journals",
+            enableQuickCopy: true, // 默认启用快速记账
+            quickCopyDays: 14 // 默认显示最近14天的记录
         };
     }
 
@@ -2828,6 +3259,54 @@ export default class AccountingPlugin extends Plugin {
             // 保存后的回调：刷新所有打开的记账视图
             await this.refreshData();
         }).open();
+    }
+
+    async openQuickCopy() {
+        // 获取最近N天的记录
+        const days = this.config.quickCopyDays || 14;
+
+        // 先加载所有记录
+        const allRecords = await this.storage.getAllRecords();
+
+        // 筛选并去重
+        const recentRecords = this.getRecentUniqueRecords(allRecords, days);
+
+        if (recentRecords.length === 0) {
+            new Notice('暂无最近记账记录');
+            return;
+        }
+
+        new QuickCopyModal(this.app, this, recentRecords, async () => {
+            // 保存后的回调：刷新所有打开的记账视图
+            await this.refreshData();
+        }).open();
+    }
+
+    getRecentUniqueRecords(allRecords: AccountingRecord[], days: number): AccountingRecord[] {
+        const now = new Date();
+        const startDate = new Date(now);
+        startDate.setDate(startDate.getDate() - days);
+        const startStr = formatLocalDate(startDate);
+
+        // 筛选最近N天的记录
+        const recentRecords = allRecords.filter(r => r.date >= startStr);
+
+        // 去重：相同关键词+金额+描述只保留一条
+        const seen = new Set<string>();
+        const uniqueRecords: AccountingRecord[] = [];
+
+        for (const record of recentRecords) {
+            const key = `${record.keyword}|${record.amount}|${record.description}`;
+            if (!seen.has(key)) {
+                seen.add(key);
+                uniqueRecords.push(record);
+            }
+        }
+
+        // 按最近使用时间排序
+        uniqueRecords.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+        return uniqueRecords;
     }
 
     async exportPDF() {
@@ -2899,6 +3378,30 @@ class AccountingSettingTab extends PluginSettingTab {
                         this.plugin.storage.clearCache();
                         await this.plugin.refreshData();
                     }
+                }));
+
+        new Setting(containerEl)
+            .setName('启用快速记账')
+            .setDesc('在侧边栏显示"快速记账"按钮，记账视图中显示"快速复制"按钮，可快速复制最近N天的记账记录到今天')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.config.enableQuickCopy !== false)
+                .onChange(async (value) => {
+                    this.plugin.config.enableQuickCopy = value;
+                    await this.plugin.saveConfig();
+                    // 刷新视图
+                    await this.plugin.refreshData();
+                }));
+
+        new Setting(containerEl)
+            .setName('快速记账天数')
+            .setDesc('快速记账显示最近N天的记录（默认14天）')
+            .addText(text => text
+                .setPlaceholder('14')
+                .setValue(String(this.plugin.config.quickCopyDays || 14))
+                .onChange(async (value) => {
+                    const days = parseInt(value) || 14;
+                    this.plugin.config.quickCopyDays = Math.max(1, Math.min(365, days));
+                    await this.plugin.saveConfig();
                 }));
 
         containerEl.createEl('p', {

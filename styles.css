@@ -1847,3 +1847,264 @@
         font-size: 16px;
     }
 }
+
+
+/* 快速复制模态框样式 */
+.quick-copy-modal {
+    padding: 20px;
+    min-width: 500px;
+    max-width: 600px;
+}
+
+.quick-copy-modal .modal-title {
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 16px;
+}
+
+.quick-copy-filter {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.quick-copy-search {
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    font-size: 14px;
+    background: var(--background-primary);
+    color: var(--text-normal);
+}
+
+.quick-copy-search:focus {
+    outline: none;
+    border-color: var(--interactive-accent);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}
+
+.quick-copy-category-select {
+    padding: 8px 12px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    font-size: 14px;
+    background: var(--background-primary);
+    color: var(--text-normal);
+    cursor: pointer;
+    min-width: 120px;
+}
+
+.quick-copy-records {
+    max-height: 400px;
+    overflow-y: auto;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+}
+
+.quick-copy-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--background-modifier-border);
+    transition: background 0.15s ease;
+}
+
+.quick-copy-item:last-child {
+    border-bottom: none;
+}
+
+.quick-copy-item:hover {
+    background: var(--background-modifier-hover);
+}
+
+.quick-copy-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1;
+    min-width: 0;
+}
+
+.quick-copy-category {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.quick-copy-amount {
+    font-weight: 600;
+    color: var(--text-normal);
+    min-width: 60px;
+}
+
+.quick-copy-desc {
+    color: var(--text-muted);
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.quick-copy-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.quick-copy-btn {
+    padding: 6px 12px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 4px;
+    font-size: 13px;
+    cursor: pointer;
+    background: var(--background-primary);
+    color: var(--text-normal);
+    transition: all 0.15s ease;
+}
+
+.quick-copy-btn:hover {
+    background: var(--background-modifier-hover);
+}
+
+.quick-copy-btn-edit {
+    background: var(--interactive-accent);
+    color: var(--text-on-accent);
+    border-color: var(--interactive-accent);
+}
+
+.quick-copy-btn-edit:hover {
+    background: var(--interactive-accent-hover);
+}
+
+.quick-copy-empty {
+    padding: 40px 20px;
+    text-align: center;
+    color: var(--text-muted);
+}
+
+.quick-copy-footer {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--background-modifier-border);
+}
+
+.quick-copy-count {
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+/* 编辑复制模态框样式 */
+.edit-copy-modal {
+    padding: 20px;
+    min-width: 350px;
+}
+
+.edit-copy-modal .modal-title {
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 16px;
+}
+
+.edit-copy-section {
+    margin-bottom: 16px;
+}
+
+.edit-copy-label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 500;
+    color: var(--text-normal);
+    font-size: 14px;
+}
+
+.edit-copy-category-display {
+    padding: 6px 12px;
+    background: var(--background-modifier-hover);
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.edit-copy-input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    font-size: 14px;
+    background: var(--background-primary);
+    color: var(--text-normal);
+    box-sizing: border-box;
+}
+
+.edit-copy-input:focus {
+    outline: none;
+    border-color: var(--interactive-accent);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}
+
+.edit-copy-buttons {
+    display: flex;
+    gap: 12px;
+    margin-top: 20px;
+    justify-content: flex-end;
+}
+
+.edit-copy-btn {
+    padding: 8px 20px;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.edit-copy-btn-cancel {
+    background: var(--background-primary);
+    color: var(--text-normal);
+    border: 1px solid var(--background-modifier-border);
+}
+
+.edit-copy-btn-cancel:hover {
+    background: var(--background-modifier-hover);
+}
+
+.edit-copy-btn-save {
+    background: var(--interactive-accent);
+    color: var(--text-on-accent);
+    border: 1px solid var(--interactive-accent);
+}
+
+.edit-copy-btn-save:hover {
+    background: var(--interactive-accent-hover);
+}
+
+/* 快速复制响应式 */
+@media (max-width: 600px) {
+    .quick-copy-modal {
+        min-width: 90vw;
+        max-width: 90vw;
+        padding: 16px;
+    }
+    
+    .quick-copy-filter {
+        flex-direction: column;
+    }
+    
+    .quick-copy-item {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 12px;
+    }
+    
+    .quick-copy-actions {
+        width: 100%;
+        justify-content: flex-end;
+    }
+    
+    .quick-copy-records {
+        max-height: 300px;
+    }
+}
