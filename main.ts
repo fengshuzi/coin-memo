@@ -2182,7 +2182,7 @@ class QuickCopyModal extends Modal {
 
     async copyRecord(record: AccountingRecord) {
         const emoji = this.plugin.config.expenseEmoji;
-        const recordLine = `- ${emoji}${record.keyword} ${record.amount}${record.description ? ' ' + record.description : ''}`;
+        const recordLine = `- ${emoji}${record.keyword}${record.description ? ' ' + record.description : ''} ${record.amount}`;
 
         try {
             await this.appendRecordToJournal(recordLine);
@@ -2294,7 +2294,19 @@ class EditCopyModal extends Modal {
             cls: 'edit-copy-category-display'
         });
 
-        // 金额输入
+        // 描述输入（先填描述）
+        const descSection = contentEl.createDiv('edit-copy-section');
+        descSection.createEl('label', { text: '描述', cls: 'edit-copy-label' });
+        this.descInput = descSection.createEl('input', {
+            type: 'text',
+            cls: 'edit-copy-input',
+            attr: {
+                value: this.record.description,
+                placeholder: '输入描述...'
+            }
+        });
+
+        // 金额输入（后改金额）
         const amountSection = contentEl.createDiv('edit-copy-section');
         amountSection.createEl('label', { text: '金额', cls: 'edit-copy-label' });
         this.amountInput = amountSection.createEl('input', {
@@ -2304,18 +2316,6 @@ class EditCopyModal extends Modal {
                 value: this.record.amount,
                 step: '0.01',
                 min: '0'
-            }
-        });
-
-        // 描述输入
-        const descSection = contentEl.createDiv('edit-copy-section');
-        descSection.createEl('label', { text: '描述', cls: 'edit-copy-label' });
-        this.descInput = descSection.createEl('input', {
-            type: 'text',
-            cls: 'edit-copy-input',
-            attr: {
-                value: this.record.description,
-                placeholder: '输入描述...'
             }
         });
 
@@ -2334,14 +2334,14 @@ class EditCopyModal extends Modal {
         cancelBtn.onclick = () => this.close();
 
         // 回车保存
-        this.amountInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') this.saveAndCopy();
-        });
         this.descInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') this.saveAndCopy();
         });
+        this.amountInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') this.saveAndCopy();
+        });
 
-        setTimeout(() => this.amountInput.focus(), 100);
+        setTimeout(() => this.descInput.focus(), 100);
     }
 
     async saveAndCopy() {
@@ -2354,7 +2354,7 @@ class EditCopyModal extends Modal {
         }
 
         const emoji = this.plugin.config.expenseEmoji;
-        const recordLine = `- ${emoji}${this.record.keyword} ${amount}${description ? ' ' + description : ''}`;
+        const recordLine = `- ${emoji}${this.record.keyword}${description ? ' ' + description : ''} ${amount}`;
 
         try {
             await this.appendRecordToJournal(recordLine);
@@ -2543,18 +2543,25 @@ class BillImportModal extends Modal {
         }
 
         const emoji = this.plugin.config.expenseEmoji;
-        const recordLine = `- ${emoji}${keyword} ${amount}${description ? ' ' + description : ''}`;
+        const recordLine = `- ${emoji}${keyword}${description ? ' ' + description : ''} ${amount}`;
 
+        // 先写入日记，写入成功后才删除 bill.md，写入失败则保留 bill.md
+        let written = false;
         try {
             await this.appendRecordToJournal(recordLine);
+            written = true;
+        } catch (error) {
+            console.error('写入日记失败:', error);
+            new Notice('❌ 记账写入失败，bill.md 已保留：' + error.message);
+            return;
+        }
+
+        if (written) {
             await this.deleteBillFile();
-            new Notice('记账成功，账单已清除');
+            new Notice('✅ 记账成功，账单已清除');
             this.close();
             await this.openJournalFileIfNotOpen(formatLocalDate(new Date()));
             if (this.onSave) await this.onSave();
-        } catch (error) {
-            console.error('账单记账失败:', error);
-            new Notice('记账失败：' + error.message);
         }
     }
 
@@ -2580,9 +2587,11 @@ class BillImportModal extends Modal {
     async deleteBillFile() {
         const billPath = `${this.plugin.config.journalsPath}/bill.md`;
         const adapter = this.app.vault.adapter;
-        // 优先通过 adapter 删除，避免缓存导致文件找不到
         if (await adapter.exists(billPath)) {
             await adapter.remove(billPath);
+            console.log(`[bill-import] 已删除账单文件：${billPath}`);
+        } else {
+            console.warn(`[bill-import] 删除时未找到账单文件（可能已被其他操作删除）：${billPath}`);
         }
     }
 
@@ -3658,19 +3667,36 @@ export default class AccountingPlugin extends Plugin {
             return;
         }
 
-        const billInfo = parseBillContent(content);
+        // 按 ### 分隔多条截图内容，只取最后一段（最新的一笔）
+        const sections = content.split(/^###\s*$/m).map(s => s.trim()).filter(s => s.length > 0);
+        const lastSection = sections[sections.length - 1] ?? '';
+        if (!lastSection) {
+            new Notice('账单文件内容无效');
+            return;
+        }
+
+        const deleteBill = async () => {
+            if (await adapter.exists(billPath)) {
+                await adapter.remove(billPath);
+                console.log(`[bill-import] 已删除账单文件：${billPath}`);
+            }
+        };
+
+        const billInfo = parseBillContent(lastSection);
 
         // 完全未识别任何支付平台
         if (!billInfo) {
-            new Notice('⚠️ 无法识别支付平台，目前支持：微信支付。请确认 bill.md 内容是否正确。', 5000);
+            await deleteBill();
+            new Notice('⚠️ 无法识别支付平台，目前支持：微信支付。', 5000);
             return;
         }
 
         // 识别到平台但字段解析失败（金额/商户缺失）
         if (!billInfo.merchant || billInfo.amount <= 0) {
+            await deleteBill();
             const platformName = billInfo.platform === 'wechat' ? '微信支付'
                 : billInfo.platform === 'alipay' ? '支付宝' : '未知平台';
-            new Notice(`⚠️ 识别到 ${platformName} 账单，但解析金额/商户失败，请检查 bill.md 内容格式。`, 5000);
+            new Notice(`⚠️ 识别到 ${platformName} 账单，但解析金额/商户失败。`, 5000);
             return;
         }
 
