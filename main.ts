@@ -11,6 +11,7 @@ interface AccountingConfig {
     defaultCategory?: string; // 默认分类关键词
     enableQuickCopy?: boolean; // 启用快速记账功能
     quickCopyDays?: number; // 快速记账显示最近N天的记录
+    billMerchantMap?: Record<string, { category: string; description?: string }>; // 账单商户关键字 → { 分类关键词, 描述 } 映射（用于bill.md自动分类）
     budgets?: {
         monthly: {
             total: number;
@@ -74,6 +75,141 @@ function formatLocalDate(date: Date): string {
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
+}
+
+// ── 账单解析器基础结构 ─────────────────────────────────────────────────────────
+
+/** 支持的支付平台类型 */
+type PaymentPlatform = 'wechat' | 'alipay' | 'unknown';
+
+/** 解析后的账单信息 */
+interface BillInfo {
+    platform: PaymentPlatform; // 识别到的支付平台
+    time: string;              // 交易时间，如 "20:58"
+    merchant: string;          // 付款方/商户名
+    amount: number;            // 金额
+    rawText: string;           // 原始文本
+}
+
+/** 单个平台解析器接口 */
+interface BillParser {
+    /** 判断文本是否来自该平台（特征关键词/结构匹配） */
+    detect(lines: string[]): boolean;
+    /** 解析文本，返回 BillInfo（不含 platform/rawText，由调用方填充） */
+    parse(lines: string[]): Omit<BillInfo, 'platform' | 'rawText'> | null;
+}
+
+// ── 公共工具 ──────────────────────────────────────────────────────────────────
+
+/** 从行列表中向上查找商户名（金额行索引之前，跳过状态/信号/时间行） */
+function findMerchantAbove(lines: string[], amountLineIdx: number): string {
+    const skipPatterns = [
+        /^\d{1,3}$/,                                          // 纯数字（电量、信号格数）
+        /^[45]G$/i,                                           // 信号标识
+        /^(完成|支付成功|转账成功|已完成|付款方|收款方|确认付款)/,  // 状态行
+        /^[•·…\-\s]+$/,                                      // 装饰行
+    ];
+    for (let i = amountLineIdx - 1; i >= 0; i--) {
+        const line = lines[i];
+        if (skipPatterns.some(p => p.test(line))) continue;
+        if (/^\d{1,2}:\d{2}/.test(line)) continue; // 跳过时间行
+        return line;
+    }
+    return '';
+}
+
+/** 从行列表中提取 HH:MM 格式时间 */
+function extractTime(lines: string[]): string {
+    for (const line of lines) {
+        const m = line.match(/(\d{1,2}:\d{2})/);
+        if (m) return m[1];
+    }
+    return '';
+}
+
+/** 从行列表中查找金额行，返回 { idx, amount } */
+function findAmountLine(lines: string[], amountPattern: RegExp, fallbackPattern?: RegExp): { idx: number; amount: number } | null {
+    for (let i = 0; i < lines.length; i++) {
+        const m = lines[i].match(amountPattern);
+        if (m) {
+            const val = parseFloat(m[1]);
+            if (val > 0) return { idx: i, amount: val };
+        }
+    }
+    if (fallbackPattern) {
+        for (let i = 0; i < lines.length; i++) {
+            const m = lines[i].match(fallbackPattern);
+            if (m) {
+                const val = parseFloat(m[1]);
+                if (val > 0) return { idx: i, amount: val };
+            }
+        }
+    }
+    return null;
+}
+
+// ── 微信支付解析器 ────────────────────────────────────────────────────────────
+// 特征：金额行前缀为 · (middle dot)，状态行含"完成"
+const wechatBillParser: BillParser = {
+    detect(lines) {
+        return lines.some(l => /^[··]\s*[\d]/.test(l)) ||
+               lines.some(l => /^完成$/.test(l));
+    },
+    parse(lines) {
+        // 金额行：·19.40 格式（优先）或宽松匹配
+        const result = findAmountLine(
+            lines,
+            /^[··¥￥\s]*([\d]+\.[\d]{1,2})\s*$/,
+            /[··¥￥]?\s*([\d]+(?:\.[\d]{1,2})?)/
+        );
+        if (!result) return null;
+        const merchant = findMerchantAbove(lines, result.idx);
+        if (!merchant) return null;
+        return { time: extractTime(lines), merchant, amount: result.amount };
+    }
+};
+
+// ── 支付宝解析器（占位，待补充特征和解析逻辑） ───────────────────────────────
+// TODO: 等收到支付宝文字格式后补充 detect() 和 parse() 实现
+const alipayBillParser: BillParser = {
+    detect(_lines) {
+        // 支付宝特征待补充
+        return false;
+    },
+    parse(_lines) {
+        // 支付宝解析逻辑待补充
+        return null;
+    }
+};
+
+// ── 解析器注册表（按优先级排列，顺序即匹配顺序） ──────────────────────────────
+const BILL_PARSERS: Array<{ platform: PaymentPlatform; parser: BillParser }> = [
+    { platform: 'wechat', parser: wechatBillParser },
+    { platform: 'alipay', parser: alipayBillParser },
+];
+
+// ── 入口函数 ──────────────────────────────────────────────────────────────────
+
+/**
+ * 从 OCR 文字内容中识别支付平台并解析账单信息。
+ * 返回 null 表示无法识别平台；BillInfo.platform === 'unknown' 表示识别到但解析失败。
+ */
+function parseBillContent(content: string): BillInfo | null {
+    const lines = content.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    if (lines.length === 0) return null;
+
+    for (const { platform, parser } of BILL_PARSERS) {
+        if (!parser.detect(lines)) continue;
+        const result = parser.parse(lines);
+        if (!result) {
+            // 平台识别成功但解析失败
+            return { platform, time: '', merchant: '', amount: 0, rawText: content };
+        }
+        return { platform, rawText: content, ...result };
+    }
+
+    // 未能识别任何平台
+    return null;
 }
 
 // 记账记录解析器
@@ -2261,6 +2397,214 @@ class EditCopyModal extends Modal {
     }
 }
 
+// 账单导入模态框（从 bill.md 解析微信支付截图文字，确认后记账并删除 bill.md）
+class BillImportModal extends Modal {
+    plugin: any;
+    billInfo: BillInfo;
+    onSave: () => Promise<void>;
+
+    keyword: string;
+    matchedDescription: string;
+    amountInput: HTMLInputElement;
+    descInput: HTMLInputElement;
+    categorySelect: HTMLSelectElement;
+
+    constructor(app: any, plugin: any, billInfo: BillInfo, onSave: () => Promise<void>) {
+        super(app);
+        this.plugin = plugin;
+        this.billInfo = billInfo;
+        this.onSave = onSave;
+
+        // 自动匹配分类和描述
+        const matched = this.autoMatch(billInfo.merchant);
+        this.keyword = matched.keyword;
+        this.matchedDescription = matched.description;
+    }
+
+    autoMatch(merchant: string): { keyword: string; description: string } {
+        const merchantMap: Record<string, any> = this.plugin.config.billMerchantMap || {};
+        for (const [pattern, entry] of Object.entries(merchantMap)) {
+            if (!merchant.includes(pattern)) continue;
+            // 兼容旧格式（entry 为字符串）和新格式（entry 为对象）
+            if (typeof entry === 'string') {
+                return { keyword: entry, description: '' };
+            }
+            return {
+                keyword: entry.category || '',
+                description: entry.description ?? '',
+            };
+        }
+        // 未命中：使用默认分类，描述留空让用户手动填
+        return {
+            keyword: this.plugin.config.defaultCategory ||
+                Object.keys(this.plugin.config.categories)[0] || '',
+            description: '',
+        };
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.addClass('bill-import-modal');
+
+        const platformMeta: Record<PaymentPlatform, { label: string; cls: string }> = {
+            wechat: { label: '微信支付', cls: 'bill-platform-wechat' },
+            alipay: { label: '支付宝',   cls: 'bill-platform-alipay' },
+            unknown: { label: '未知平台', cls: 'bill-platform-unknown' },
+        };
+        const meta = platformMeta[this.billInfo.platform];
+        this.titleEl.setText('账单导入');
+
+        // ── 收据卡片 ──────────────────────────────────────────────
+        const card = contentEl.createDiv('bill-receipt-card');
+
+        // 平台标签
+        const badge = card.createDiv('bill-platform-badge ' + meta.cls);
+        badge.setText(meta.label);
+
+        // 商户名（主标题）
+        card.createDiv('bill-merchant').setText(this.billInfo.merchant);
+
+        // 金额（大字）
+        card.createDiv('bill-amount-display').setText(`¥${this.billInfo.amount.toFixed(2)}`);
+
+        // 时间（小字）
+        if (this.billInfo.time) {
+            card.createDiv('bill-time').setText(this.billInfo.time);
+        }
+
+        // ── 表单区 ────────────────────────────────────────────────
+        const form = contentEl.createDiv('bill-form');
+
+        // 分类
+        const catRow = form.createDiv('bill-form-row');
+        catRow.createEl('label', { text: '分类', cls: 'bill-form-label' });
+        this.categorySelect = catRow.createEl('select', { cls: 'bill-form-select' });
+        Object.entries(this.plugin.config.categories as Record<string, string>).forEach(([kw, name]) => {
+            const opt = this.categorySelect.createEl('option', { text: `${name}（${kw}）`, value: kw });
+            if (kw === this.keyword) opt.selected = true;
+        });
+
+        // 金额（可修改）
+        const amtRow = form.createDiv('bill-form-row');
+        amtRow.createEl('label', { text: '金额', cls: 'bill-form-label' });
+        this.amountInput = amtRow.createEl('input', {
+            type: 'number',
+            cls: 'bill-form-input',
+            attr: { value: this.billInfo.amount.toFixed(2), step: '0.01', min: '0.01' }
+        });
+
+        // 描述
+        const descRow = form.createDiv('bill-form-row');
+        descRow.createEl('label', { text: '描述', cls: 'bill-form-label' });
+        this.descInput = descRow.createEl('input', {
+            type: 'text',
+            cls: 'bill-form-input',
+            attr: { value: this.matchedDescription, placeholder: '可留空' }
+        });
+
+        // ── 按钮区 ────────────────────────────────────────────────
+        const buttons = contentEl.createDiv('bill-import-buttons');
+
+        const cancelBtn = buttons.createEl('button', {
+            text: '取消',
+            cls: 'bill-btn bill-btn-cancel'
+        });
+        cancelBtn.onclick = () => this.close();
+
+        const confirmBtn = buttons.createEl('button', {
+            text: '记账',
+            cls: 'bill-btn bill-btn-confirm'
+        });
+        confirmBtn.onclick = () => this.saveAndClose();
+
+        // 回车确认
+        [this.amountInput, this.descInput].forEach(el => {
+            el.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') this.saveAndClose();
+            });
+        });
+
+        setTimeout(() => this.descInput.focus(), 100);
+    }
+
+    async saveAndClose() {
+        const amount = parseFloat(this.amountInput.value);
+        const description = this.descInput.value.trim();
+        const keyword = this.categorySelect.value;
+
+        if (!amount || amount <= 0) {
+            new Notice('请输入有效金额');
+            return;
+        }
+        if (!keyword) {
+            new Notice('请选择分类');
+            return;
+        }
+
+        const emoji = this.plugin.config.expenseEmoji;
+        const recordLine = `- ${emoji}${keyword} ${amount}${description ? ' ' + description : ''}`;
+
+        try {
+            await this.appendRecordToJournal(recordLine);
+            await this.deleteBillFile();
+            new Notice('记账成功，账单已清除');
+            this.close();
+            await this.openJournalFileIfNotOpen(formatLocalDate(new Date()));
+            if (this.onSave) await this.onSave();
+        } catch (error) {
+            console.error('账单记账失败:', error);
+            new Notice('记账失败：' + error.message);
+        }
+    }
+
+    async appendRecordToJournal(recordLine: string) {
+        const today = formatLocalDate(new Date());
+        const journalPath = `${this.plugin.config.journalsPath}/${today}.md`;
+        const file = this.app.vault.getAbstractFileByPath(journalPath);
+
+        if (file instanceof TFile) {
+            let content = await this.app.vault.read(file);
+            const lines = content.split('\n');
+            while (lines.length > 0 && (lines[lines.length - 1].trim() === '' || lines[lines.length - 1].trim() === '-')) {
+                lines.pop();
+            }
+            let newContent = lines.join('\n');
+            newContent = newContent.length > 0 ? newContent + '\n' + recordLine : recordLine;
+            await this.app.vault.modify(file, newContent);
+        } else {
+            await this.app.vault.create(journalPath, recordLine);
+        }
+    }
+
+    async deleteBillFile() {
+        const billPath = `${this.plugin.config.journalsPath}/bill.md`;
+        const file = this.app.vault.getAbstractFileByPath(billPath);
+        if (file instanceof TFile) {
+            await this.app.vault.delete(file);
+        }
+    }
+
+    async openJournalFileIfNotOpen(date: string) {
+        const filePath = `${this.plugin.config.journalsPath}/${date}.md`;
+        const file = this.app.vault.getAbstractFileByPath(filePath);
+        if (!(file instanceof TFile)) return;
+
+        const leaves = this.app.workspace.getLeavesOfType('markdown');
+        const existingLeaf = leaves.find((leaf: any) => leaf.view?.file?.path === filePath);
+        if (existingLeaf) {
+            this.app.workspace.setActiveLeaf(existingLeaf);
+        } else {
+            const leaf = this.app.workspace.getLeaf();
+            await leaf.openFile(file);
+        }
+    }
+
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+
 // 记账视图
 const ACCOUNTING_VIEW = 'accounting-view';
 
@@ -3140,6 +3484,13 @@ export default class AccountingPlugin extends Plugin {
         }
 
         this.addCommand({
+            id: 'bill-import',
+            name: '从账单导入记账（bill.md）',
+            icon: 'receipt',
+            callback: () => this.openBillImport()
+        });
+
+        this.addCommand({
             id: 'export-pdf',
             name: '导出账单 PDF',
             icon: 'file-down',
@@ -3282,6 +3633,42 @@ export default class AccountingPlugin extends Plugin {
         }).open();
     }
 
+    async openBillImport() {
+        const billPath = `${this.config.journalsPath}/bill.md`;
+        const file = this.app.vault.getAbstractFileByPath(billPath);
+
+        if (!(file instanceof TFile)) {
+            new Notice(`未找到账单文件：${billPath}`);
+            return;
+        }
+
+        const content = await this.app.vault.read(file);
+        if (!content.trim()) {
+            new Notice('账单文件为空');
+            return;
+        }
+
+        const billInfo = parseBillContent(content);
+
+        // 完全未识别任何支付平台
+        if (!billInfo) {
+            new Notice('⚠️ 无法识别支付平台，目前支持：微信支付。请确认 bill.md 内容是否正确。', 5000);
+            return;
+        }
+
+        // 识别到平台但字段解析失败（金额/商户缺失）
+        if (!billInfo.merchant || billInfo.amount <= 0) {
+            const platformName = billInfo.platform === 'wechat' ? '微信支付'
+                : billInfo.platform === 'alipay' ? '支付宝' : '未知平台';
+            new Notice(`⚠️ 识别到 ${platformName} 账单，但解析金额/商户失败，请检查 bill.md 内容格式。`, 5000);
+            return;
+        }
+
+        new BillImportModal(this.app, this, billInfo, async () => {
+            await this.refreshData();
+        }).open();
+    }
+
     getRecentUniqueRecords(allRecords: AccountingRecord[], days: number): AccountingRecord[] {
         const now = new Date();
         const startDate = new Date(now);
@@ -3408,5 +3795,49 @@ class AccountingSettingTab extends PluginSettingTab {
             text: '💡 提示：修改后会自动保存并刷新数据。日记文件应存放在此文件夹下，格式为 YYYY-MM-DD.md',
             cls: 'setting-item-description'
         });
+
+        // ── 账单导入（bill.md）商户分类配置 ──────────────────────────────────
+        containerEl.createEl('h3', { text: '账单导入 - 商户自动分类' });
+        containerEl.createEl('p', {
+            text: '每行一条，格式：商户关键字=分类关键词=描述（描述可省略）。执行「从账单导入记账」命令时，自动根据识别到的商户名匹配分类和描述。',
+            cls: 'setting-item-description'
+        });
+        containerEl.createEl('p', {
+            text: '示例：\n豆磨坊=cy=买豆腐\n麦当劳=cy=麦当劳\n盒马=gw',
+            cls: 'setting-item-description'
+        });
+
+        const merchantMap: Record<string, { category: string; description?: string }> =
+            this.plugin.config.billMerchantMap || {};
+        const merchantLines = Object.entries(merchantMap)
+            .map(([k, v]) => v.description ? `${k}=${v.category}=${v.description}` : `${k}=${v.category}`)
+            .join('\n');
+
+        new Setting(containerEl)
+            .setName('商户分类映射')
+            .setDesc('格式：商户关键字=分类关键词=描述（描述可省略，留空时记账描述也为空）')
+            .addTextArea(ta => {
+                ta.setPlaceholder('豆磨坊=cy=买豆腐\n麦当劳=cy=麦当劳\n盒马=gw');
+                ta.setValue(merchantLines);
+                ta.inputEl.rows = 8;
+                ta.inputEl.style.width = '100%';
+                ta.inputEl.style.fontFamily = 'monospace';
+                ta.onChange(async (value) => {
+                    const map: Record<string, { category: string; description?: string }> = {};
+                    value.split('\n').forEach(line => {
+                        const trimmed = line.trim();
+                        if (!trimmed || !trimmed.includes('=')) return;
+                        const parts = trimmed.split('=');
+                        const merchantKey = parts[0].trim();
+                        const category = parts[1]?.trim();
+                        const description = parts.slice(2).join('=').trim(); // 描述可含=
+                        if (merchantKey && category) {
+                            map[merchantKey] = description ? { category, description } : { category };
+                        }
+                    });
+                    this.plugin.config.billMerchantMap = map;
+                    await this.plugin.saveConfig();
+                });
+            });
     }
 }

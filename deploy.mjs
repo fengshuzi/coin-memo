@@ -66,12 +66,18 @@ vaults.forEach((vault) => {
     
     // 复制文件
     files.forEach((file) => {
-      if (existsSync(file.source)) {
-        copyFileSync(file.source, join(vault.path, file.target));
-        console.log(`  ✓ 已复制 ${file.source} → ${file.target}`);
-      } else {
+      if (!existsSync(file.source)) {
         console.log(`  ⚠️  警告: ${file.source} 不存在`);
+        return;
       }
+      const targetPath = join(vault.path, file.target);
+      // config.json 已存在时跳过（保留用户已配置的内容）
+      if (file.target === 'config.json' && existsSync(targetPath)) {
+        console.log(`  ⏭  跳过 ${file.target}（已存在，保留用户配置）`);
+        return;
+      }
+      copyFileSync(file.source, targetPath);
+      console.log(`  ✓ 已复制 ${file.source} → ${file.target}`);
     });
     
     console.log(`✅ ${vault.name} 部署成功\n`);

@@ -2108,3 +2108,170 @@
         max-height: 300px;
     }
 }
+
+/* ── 账单导入弹框 ─────────────────────────────────────────── */
+.bill-import-modal {
+    padding: 0;
+    min-width: 340px;
+    max-width: 400px;
+}
+
+/* 收据卡片 */
+.bill-receipt-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 28px 24px 24px;
+    background: linear-gradient(135deg, #f0fdf4, #dcfce7);
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.bill-platform-badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    margin-bottom: 4px;
+}
+
+.bill-platform-wechat {
+    background: #dcfce7;
+    color: #166534;
+    border: 1px solid #86efac;
+}
+
+.bill-platform-alipay {
+    background: #dbeafe;
+    color: #1e40af;
+    border: 1px solid #93c5fd;
+}
+
+.bill-platform-unknown {
+    background: var(--background-modifier-border);
+    color: var(--text-muted);
+    border: 1px solid var(--background-modifier-border);
+}
+
+.bill-merchant {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-normal);
+    text-align: center;
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.bill-amount-display {
+    font-size: 36px;
+    font-weight: 700;
+    color: #16a34a;
+    letter-spacing: -1px;
+    line-height: 1.1;
+    margin: 4px 0;
+}
+
+.bill-time {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-weight: 400;
+}
+
+/* 表单区 */
+.bill-form {
+    padding: 20px 24px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.bill-form-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.bill-form-label {
+    width: 36px;
+    flex-shrink: 0;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-align: right;
+}
+
+.bill-form-select,
+.bill-form-input {
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    background: var(--background-primary);
+    color: var(--text-normal);
+    font-size: 14px;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.bill-form-select:focus,
+.bill-form-input:focus {
+    outline: none;
+    border-color: var(--interactive-accent);
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.1);
+}
+
+.bill-form-input[type="number"] {
+    font-size: 16px;
+    font-weight: 600;
+}
+
+/* 按钮区 */
+.bill-import-buttons {
+    display: flex;
+    gap: 10px;
+    padding: 16px 24px 20px;
+}
+
+.bill-btn {
+    flex: 1;
+    padding: 10px 0;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    transition: all 0.15s ease;
+}
+
+.bill-btn-cancel {
+    background: var(--background-secondary);
+    color: var(--text-muted);
+    border: 1px solid var(--background-modifier-border);
+}
+
+.bill-btn-cancel:hover {
+    background: var(--background-modifier-hover);
+    color: var(--text-normal);
+}
+
+.bill-btn-confirm {
+    background: linear-gradient(135deg, #16a34a, #15803d);
+    color: #fff;
+    box-shadow: 0 2px 6px rgba(22, 163, 74, 0.35);
+}
+
+.bill-btn-confirm:hover {
+    background: linear-gradient(135deg, #15803d, #166534);
+    box-shadow: 0 4px 10px rgba(22, 163, 74, 0.45);
+    transform: translateY(-1px);
+}
+
+@media (max-width: 600px) {
+    .bill-import-modal {
+        min-width: 88vw;
+        max-width: 92vw;
+    }
+}
