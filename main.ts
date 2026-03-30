@@ -2579,9 +2579,10 @@ class BillImportModal extends Modal {
 
     async deleteBillFile() {
         const billPath = `${this.plugin.config.journalsPath}/bill.md`;
-        const file = this.app.vault.getAbstractFileByPath(billPath);
-        if (file instanceof TFile) {
-            await this.app.vault.delete(file);
+        const adapter = this.app.vault.adapter;
+        // 优先通过 adapter 删除，避免缓存导致文件找不到
+        if (await adapter.exists(billPath)) {
+            await adapter.remove(billPath);
         }
     }
 
@@ -3635,16 +3636,25 @@ export default class AccountingPlugin extends Plugin {
 
     async openBillImport() {
         const billPath = `${this.config.journalsPath}/bill.md`;
-        const file = this.app.vault.getAbstractFileByPath(billPath);
+        const adapter = this.app.vault.adapter;
 
-        if (!(file instanceof TFile)) {
-            new Notice(`未找到账单文件：${billPath}`);
-            return;
+        // bill.md 可能刚被快捷指令写入，绕过 Obsidian 缓存直接用 adapter 读取
+        // 最多重试 5 次（共等待约 500ms），兼容文件刚写入的时序差
+        const MAX_RETRIES = 5;
+        const RETRY_DELAY = 100;
+        let content = '';
+        for (let i = 0; i < MAX_RETRIES; i++) {
+            if (await adapter.exists(billPath)) {
+                content = await adapter.read(billPath);
+                if (content.trim()) break;
+            }
+            if (i < MAX_RETRIES - 1) {
+                await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+            }
         }
 
-        const content = await this.app.vault.read(file);
         if (!content.trim()) {
-            new Notice('账单文件为空');
+            new Notice(`未找到账单文件或文件为空：${billPath}`);
             return;
         }
 
