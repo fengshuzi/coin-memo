@@ -79,6 +79,23 @@ vaults.forEach((vault) => {
       copyFileSync(file.source, targetPath);
       console.log(`  ✓ 已复制 ${file.source} → ${file.target}`);
     });
+
+    // 复制插件运行时所需的静态资源（不含文档截图）
+    const pluginAssets = ['wechat-donate.jpg'];
+    const assetsSource = 'assets';
+    const assetsTarget = join(vault.path, 'assets');
+    if (!existsSync(assetsTarget)) {
+      mkdirSync(assetsTarget, { recursive: true });
+    }
+    pluginAssets.forEach((fileName) => {
+      const src = join(assetsSource, fileName);
+      if (existsSync(src)) {
+        copyFileSync(src, join(assetsTarget, fileName));
+        console.log(`  ✓ 已复制 assets/${fileName}`);
+      } else {
+        console.log(`  ⚠️  警告: assets/${fileName} 不存在`);
+      }
+    });
     
     console.log(`✅ ${vault.name} 部署成功\n`);
     successCount++;
