@@ -2434,11 +2434,13 @@ class BillImportModal extends Modal {
                 description: entry.description ?? '',
             };
         }
-        // 未命中：使用默认分类，描述留空让用户手动填
+        // 未命中：用商户名作为默认描述，去掉括号及括号内内容（隐藏私人账户真实姓名）
+        // 支持全角括号（）和半角括号()
+        const cleanedMerchant = merchant.replace(/[（(][^）)]*[）)]/g, '').trim();
         return {
             keyword: this.plugin.config.defaultCategory ||
                 Object.keys(this.plugin.config.categories)[0] || '',
-            description: '',
+            description: cleanedMerchant,
         };
     }
 
