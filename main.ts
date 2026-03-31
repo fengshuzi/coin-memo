@@ -80,7 +80,7 @@ function formatLocalDate(date: Date): string {
 // ── 账单解析器基础结构 ─────────────────────────────────────────────────────────
 
 /** 支持的支付平台类型 */
-type PaymentPlatform = 'wechat' | 'alipay' | 'unknown';
+type PaymentPlatform = 'wechat' | 'alipay' | 'ccb' | 'unknown';
 
 /** 解析后的账单信息 */
 interface BillInfo {
@@ -150,13 +150,12 @@ function findAmountLine(lines: string[], amountPattern: RegExp, fallbackPattern?
 
 // ── 微信支付解析器 ────────────────────────────────────────────────────────────
 // 特征：金额行前缀为 · (middle dot)，状态行含"完成"
+// 微信支付完成页（支付后弹出的页面，含「完成」字样）
 const wechatBillParser: BillParser = {
     detect(lines) {
-        return lines.some(l => /^[··]\s*[\d]/.test(l)) ||
-               lines.some(l => /^完成$/.test(l));
+        return lines.some(l => /^完成$/.test(l));
     },
     parse(lines) {
-        // 金额行：·19.40 格式（优先）或宽松匹配
         const result = findAmountLine(
             lines,
             /^[··¥￥\s]*([\d]+\.[\d]{1,2})\s*$/,
@@ -169,15 +168,115 @@ const wechatBillParser: BillParser = {
     }
 };
 
+// 微信支付账单列表页（主动打开微信支付看到的账单页，含「我的账单」+「支付服务」）
+// 页面可能含多笔记录，只取「我的账单」标签行之前的最后一笔
+const wechatHistoryParser: BillParser = {
+    detect(lines) {
+        return lines.some(l => l.includes('我的账单')) &&
+               lines.some(l => l.includes('支付服务'));
+    },
+    parse(lines) {
+        // 截取到「我的账单」之前的内容，避免底部导航栏文字干扰
+        const cutoff = lines.findIndex(l => l.includes('我的账单'));
+        const searchLines = cutoff > 0 ? lines.slice(0, cutoff) : lines;
+
+        // 从后往前找最后一个金额行（·10.00 格式）
+        let amountLineIdx = -1;
+        let amount = 0;
+        for (let i = searchLines.length - 1; i >= 0; i--) {
+            const m = searchLines[i].match(/^[··¥￥\s]*([\d]+\.[\d]{1,2})\s*$/);
+            if (m) {
+                const val = parseFloat(m[1]);
+                if (val > 0) { amount = val; amountLineIdx = i; break; }
+            }
+        }
+        if (amountLineIdx === -1 || amount <= 0) return null;
+
+        // 向上找商户名，跳过付款方式行（「使用XX支付」）和噪声行
+        const skipPatterns = [
+            /^使用.+支付$/,
+            /^账单详情/,
+            /^\d{1,3}$/,
+            /^[45]G$/i,
+            /^[•·…\-\s]+$/,
+        ];
+        let merchant = '';
+        for (let i = amountLineIdx - 1; i >= 0; i--) {
+            const line = searchLines[i];
+            if (skipPatterns.some(p => p.test(line))) continue;
+            if (/^\d{1,2}:\d{2}/.test(line)) continue;
+            merchant = line;
+            break;
+        }
+        if (!merchant) return null;
+
+        return { time: extractTime(searchLines), merchant, amount };
+    }
+};
+
+// 建设银行动账提醒页（微信内收到的银行消息通知，含「动账提醒」字样）
+// 从结构化字段中提取：交易对象（商户）、交易金额、交易时间
+const ccbNotificationParser: BillParser = {
+    detect(lines) {
+        return lines.some(l => l.includes('动账提醒'));
+    },
+    parse(lines) {
+        // 交易金额：优先从「交易金额：」行取，兼容金额在下一行的情况
+        let amount = 0;
+        const amountLabelIdx = lines.findIndex(l => /^交易金额/.test(l));
+        if (amountLabelIdx >= 0) {
+            const sameLineMatch = lines[amountLabelIdx].match(/[：:]\s*([\d.]+)/);
+            if (sameLineMatch) {
+                amount = parseFloat(sameLineMatch[1]);
+            } else {
+                for (let i = amountLabelIdx + 1; i < lines.length; i++) {
+                    const m = lines[i].match(/^([\d.]+)$/);
+                    if (m) { amount = parseFloat(m[1]); break; }
+                }
+            }
+        }
+        // 兜底：从 ·-10.00 格式取绝对值
+        if (!amount) {
+            for (const line of lines) {
+                const m = line.match(/^[··]-?\s*([\d]+\.[\d]{1,2})\s*$/);
+                if (m) { amount = parseFloat(m[1]); break; }
+            }
+        }
+        if (!amount || amount <= 0) return null;
+
+        // 交易对象：去掉「微信支付-」「支付宝-」等前缀，得到真实商户名
+        let merchant = '';
+        const merchantLine = lines.find(l => /^交易对象/.test(l));
+        if (merchantLine) {
+            const m = merchantLine.match(/[：:]\s*(.+)/);
+            if (m) {
+                merchant = m[1]
+                    .replace(/^微信支付[-–—]/, '')
+                    .replace(/^支付宝[-–—]/, '')
+                    .trim();
+            }
+        }
+        if (!merchant) return null;
+
+        // 交易时间：从「交易时间：2026/03/31 12:42:19」中提取 HH:MM
+        let time = '';
+        const timeLine = lines.find(l => /^交易时间/.test(l));
+        if (timeLine) {
+            const m = timeLine.match(/(\d{1,2}:\d{2})/);
+            if (m) time = m[1];
+        }
+
+        return { time, merchant, amount };
+    }
+};
+
 // ── 支付宝解析器（占位，待补充特征和解析逻辑） ───────────────────────────────
 // TODO: 等收到支付宝文字格式后补充 detect() 和 parse() 实现
 const alipayBillParser: BillParser = {
     detect(_lines) {
-        // 支付宝特征待补充
         return false;
     },
     parse(_lines) {
-        // 支付宝解析逻辑待补充
         return null;
     }
 };
@@ -185,6 +284,8 @@ const alipayBillParser: BillParser = {
 // ── 解析器注册表（按优先级排列，顺序即匹配顺序） ──────────────────────────────
 const BILL_PARSERS: Array<{ platform: PaymentPlatform; parser: BillParser }> = [
     { platform: 'wechat', parser: wechatBillParser },
+    { platform: 'wechat', parser: wechatHistoryParser },
+    { platform: 'ccb',    parser: ccbNotificationParser },
     { platform: 'alipay', parser: alipayBillParser },
 ];
 
@@ -2450,9 +2551,10 @@ class BillImportModal extends Modal {
         contentEl.addClass('bill-import-modal');
 
         const platformMeta: Record<PaymentPlatform, { label: string; cls: string }> = {
-            wechat: { label: '微信支付', cls: 'bill-platform-wechat' },
-            alipay: { label: '支付宝',   cls: 'bill-platform-alipay' },
-            unknown: { label: '未知平台', cls: 'bill-platform-unknown' },
+            wechat:  { label: '微信支付',     cls: 'bill-platform-wechat' },
+            alipay:  { label: '支付宝',       cls: 'bill-platform-alipay' },
+            ccb:     { label: '建设银行',     cls: 'bill-platform-ccb' },
+            unknown: { label: '未知平台',     cls: 'bill-platform-unknown' },
         };
         const meta = platformMeta[this.billInfo.platform];
         this.titleEl.setText('账单导入');
@@ -3697,7 +3799,9 @@ export default class AccountingPlugin extends Plugin {
         if (!billInfo.merchant || billInfo.amount <= 0) {
             await deleteBill();
             const platformName = billInfo.platform === 'wechat' ? '微信支付'
-                : billInfo.platform === 'alipay' ? '支付宝' : '未知平台';
+                : billInfo.platform === 'alipay' ? '支付宝'
+                : billInfo.platform === 'ccb' ? '建设银行'
+                : '未知平台';
             new Notice(`⚠️ 识别到 ${platformName} 账单，但解析金额/商户失败。`, 5000);
             return;
         }

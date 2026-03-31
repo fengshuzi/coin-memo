@@ -2149,6 +2149,12 @@
     border: 1px solid #93c5fd;
 }
 
+.bill-platform-ccb {
+    background: #fef3c7;
+    color: #92400e;
+    border: 1px solid #fcd34d;
+}
+
 .bill-platform-unknown {
     background: var(--background-modifier-border);
     color: var(--text-muted);
