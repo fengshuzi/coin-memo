@@ -2281,3 +2281,46 @@
         max-width: 92vw;
     }
 }
+
+/* 设置页打赏区 */
+.accounting-donate-section {
+    margin-top: 48px;
+    padding-top: 24px;
+    border-top: 1px solid var(--background-modifier-border);
+    text-align: center;
+}
+
+.accounting-donate-section h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-normal);
+    margin-bottom: 6px;
+}
+
+.accounting-donate-desc {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+}
+
+.accounting-donate-qr {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 16px 20px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 12px;
+    background: var(--background-secondary);
+}
+
+.accounting-donate-qr img {
+    border-radius: 8px;
+    display: block;
+}
+
+.accounting-donate-label {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    margin: 0;
+}

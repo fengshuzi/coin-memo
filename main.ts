@@ -3981,5 +3981,18 @@ class AccountingSettingTab extends PluginSettingTab {
                     await this.plugin.saveConfig();
                 });
             });
+
+        // 打赏区
+        const donateSection = containerEl.createDiv({ cls: 'accounting-donate-section' });
+        donateSection.createEl('h3', { text: '☕ 请作者喝杯咖啡' });
+        const donateDesc = donateSection.createEl('p', { cls: 'accounting-donate-desc' });
+        donateDesc.setText('如果这个插件帮助了你，欢迎扫码打赏，感谢支持！');
+
+        const imgWrap = donateSection.createDiv({ cls: 'accounting-donate-qr' });
+        const imgSrc = this.plugin.app.vault.adapter.getResourcePath(
+            `${this.plugin.manifest.dir}/assets/wechat-donate.jpg`
+        );
+        imgWrap.createEl('img', { attr: { src: imgSrc, alt: '微信打赏', width: '160' } });
+        imgWrap.createEl('p', { text: '微信扫码打赏', cls: 'accounting-donate-label' });
     }
 }
