@@ -150,10 +150,10 @@ function findAmountLine(lines: string[], amountPattern: RegExp, fallbackPattern?
 
 // ── 微信支付解析器 ────────────────────────────────────────────────────────────
 // 特征：金额行前缀为 · (middle dot)，状态行含"完成"
-// 微信支付完成页（支付后弹出的页面，含「完成」字样）
+// 微信支付完成页（支付后弹出的页面，含「完成」/「返回商家」/「支付成功」字样）
 const wechatBillParser: BillParser = {
     detect(lines) {
-        return lines.some(l => /^完成$/.test(l));
+        return lines.some(l => /^完成$/.test(l) || /^返回商家$/.test(l) || l.includes('支付成功'));
     },
     parse(lines) {
         const result = findAmountLine(
@@ -218,7 +218,7 @@ const wechatHistoryParser: BillParser = {
 // 从结构化字段中提取：交易对象（商户）、交易金额、交易时间
 const ccbNotificationParser: BillParser = {
     detect(lines) {
-        return lines.some(l => l.includes('动账提醒'));
+        return lines.some(l => l.includes('动账提醒') || l.includes('变动提醒'));
     },
     parse(lines) {
         // 交易金额：优先从「交易金额：」行取，兼容金额在下一行的情况
