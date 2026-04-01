@@ -154,18 +154,22 @@ function findAmountLine(lines: string[], amountPattern: RegExp, fallbackPattern?
 
 // ── 微信支付解析器 ────────────────────────────────────────────────────────────
 // 特征：金额行前缀为 · (middle dot)，状态行含"完成"
-// 微信支付完成页（支付后弹出的页面，含「支付成功」或「返回商家」字样）
-// 注意：单独的「完成」不作为微信特征，支付宝完成页也有「完成」按钮
+// 微信支付完成页（支付后弹出的页面，含「支付成功」/「返回商家」/「完成」字样）
+// 注意：支付宝完成页也有「完成」，但支付宝解析器排在前面（用「完成」+「付款方式」检测），
+// 所以走到这里的「完成」可以安全归为微信
 const wechatBillParser: BillParser = {
     detect(lines) {
-        return lines.some(l => /^返回商家$/.test(l) || l.includes('支付成功'));
+        return lines.some(l => /^完成$/.test(l) || /^返回商家$/.test(l) || l.includes('支付成功'));
     },
     parse(lines) {
         // 从后往前找最后一个金额行，一个截图可能含多笔记录，只取最后一笔
+        // OCR 对 ¥ 的误识别很多（· * . Y 等），只要行内能提取出 数字.数字 且行较短即可
         let amountLineIdx = -1;
         let amount = 0;
         for (let i = lines.length - 1; i >= 0; i--) {
-            const m = lines[i].match(/^[··¥￥\-\s]*([\d]+\.[\d]{1,2})\s*$/);
+            const line = lines[i];
+            if (line.length > 20) continue; // 金额行不会太长
+            const m = line.match(/([\d]+\.[\d]{1,2})\s*$/);
             if (m) {
                 const val = parseFloat(m[1]);
                 if (val > 0) { amount = val; amountLineIdx = i; break; }
@@ -190,11 +194,13 @@ const wechatHistoryParser: BillParser = {
         const cutoff = lines.findIndex(l => l.includes('我的账单'));
         const searchLines = cutoff > 0 ? lines.slice(0, cutoff) : lines;
 
-        // 从后往前找最后一个金额行（·10.00 或 -10.00 格式）
+        // 从后往前找最后一个金额行
         let amountLineIdx = -1;
         let amount = 0;
         for (let i = searchLines.length - 1; i >= 0; i--) {
-            const m = searchLines[i].match(/^[··¥￥\-\s]*([\d]+\.[\d]{1,2})\s*$/);
+            const line = searchLines[i];
+            if (line.length > 20) continue;
+            const m = line.match(/([\d]+\.[\d]{1,2})\s*$/);
             if (m) {
                 const val = parseFloat(m[1]);
                 if (val > 0) { amount = val; amountLineIdx = i; break; }
@@ -298,7 +304,9 @@ const alipayBillParser: BillParser = {
         let amountLineIdx = -1;
         let amount = 0;
         for (let i = doneIdx + 1; i < lines.length; i++) {
-            const m = lines[i].match(/^[··¥￥\-\s]*([\d]+\.[\d]{1,2})\s*$/);
+            const line = lines[i];
+            if (line.length > 20) continue;
+            const m = line.match(/([\d]+\.[\d]{1,2})\s*$/);
             if (m) {
                 const val = parseFloat(m[1]);
                 if (val > 0) { amount = val; amountLineIdx = i; break; }
@@ -3840,14 +3848,12 @@ export default class AccountingPlugin extends Plugin {
 
         // 完全未识别任何页面类型
         if (!billInfo) {
-            await deleteBill();
-            new Notice('⚠️ 无法识别截图类型，目前支持：微信支付完成页、微信支付账单页、建设银行动账提醒。', 5000);
+            new Notice('⚠️ 无法识别截图类型，bill.md 已保留。目前支持：微信支付完成页、微信支付账单页、支付宝完成页、建设银行动账提醒。', 5000);
             return;
         }
 
         // 识别到页面类型但字段解析失败（金额/商户缺失）
         if (!billInfo.merchant || billInfo.amount <= 0) {
-            await deleteBill();
             const sourceMeta: Record<BillSource, string> = {
                 wechat_bill: '微信支付完成页',
                 wechat_history: '微信支付账单页',
@@ -3855,7 +3861,7 @@ export default class AccountingPlugin extends Plugin {
                 ccb: '建设银行动账提醒',
                 unknown: '未知页面',
             };
-            new Notice(`⚠️ 识别到「${sourceMeta[billInfo.source]}」，但解析金额/商户失败。`, 5000);
+            new Notice(`⚠️ 识别到「${sourceMeta[billInfo.source]}」，但解析金额/商户失败，bill.md 已保留。`, 5000);
             return;
         }
 
