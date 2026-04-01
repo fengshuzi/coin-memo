@@ -12,6 +12,7 @@ interface AccountingConfig {
     enableQuickCopy?: boolean; // 启用快速记账功能
     quickCopyDays?: number; // 快速记账显示最近N天的记录
     billMerchantMap?: Record<string, { category: string; description?: string }>; // 账单商户关键字 → { 分类关键词, 描述 } 映射（用于bill.md自动分类）
+    silentBillImport?: boolean; // 静默记账：识别成功后不弹窗，直接写入日记
     budgets?: {
         monthly: {
             total: number;
@@ -79,24 +80,24 @@ function formatLocalDate(date: Date): string {
 
 // ── 账单解析器基础结构 ─────────────────────────────────────────────────────────
 
-/** 支持的支付平台类型 */
-type PaymentPlatform = 'wechat' | 'alipay' | 'ccb' | 'unknown';
+/** 支持的截图页面类型 */
+type BillSource = 'wechat_bill' | 'wechat_history' | 'alipay' | 'ccb' | 'unknown';
 
 /** 解析后的账单信息 */
 interface BillInfo {
-    platform: PaymentPlatform; // 识别到的支付平台
+    source: BillSource;        // 识别到的截图页面类型
     time: string;              // 交易时间，如 "20:58"
     merchant: string;          // 付款方/商户名
     amount: number;            // 金额
     rawText: string;           // 原始文本
 }
 
-/** 单个平台解析器接口 */
+/** 单个页面解析器接口 */
 interface BillParser {
-    /** 判断文本是否来自该平台（特征关键词/结构匹配） */
+    /** 判断文本是否来自该页面类型（特征关键词/结构匹配） */
     detect(lines: string[]): boolean;
-    /** 解析文本，返回 BillInfo（不含 platform/rawText，由调用方填充） */
-    parse(lines: string[]): Omit<BillInfo, 'platform' | 'rawText'> | null;
+    /** 解析文本，返回 BillInfo（不含 source/rawText，由调用方填充） */
+    parse(lines: string[]): Omit<BillInfo, 'source' | 'rawText'> | null;
 }
 
 // ── 公共工具 ──────────────────────────────────────────────────────────────────
@@ -108,6 +109,9 @@ function findMerchantAbove(lines: string[], amountLineIdx: number): string {
         /^[45]G$/i,                                           // 信号标识
         /^(完成|支付成功|转账成功|已完成|付款方|收款方|确认付款)/,  // 状态行
         /^[•·…\-\s]+$/,                                      // 装饰行
+        /^使用.+支付$/,                                       // 付款方式行（亲属卡等）
+        /^交易状态/,                                           // 交易状态标签行
+        /^(已转账|已退款|已收款|待确认|已关闭|对方已收款)/,       // 交易状态值
     ];
     for (let i = amountLineIdx - 1; i >= 0; i--) {
         const line = lines[i];
@@ -150,21 +154,27 @@ function findAmountLine(lines: string[], amountPattern: RegExp, fallbackPattern?
 
 // ── 微信支付解析器 ────────────────────────────────────────────────────────────
 // 特征：金额行前缀为 · (middle dot)，状态行含"完成"
-// 微信支付完成页（支付后弹出的页面，含「完成」/「返回商家」/「支付成功」字样）
+// 微信支付完成页（支付后弹出的页面，含「支付成功」或「返回商家」字样）
+// 注意：单独的「完成」不作为微信特征，支付宝完成页也有「完成」按钮
 const wechatBillParser: BillParser = {
     detect(lines) {
-        return lines.some(l => /^完成$/.test(l) || /^返回商家$/.test(l) || l.includes('支付成功'));
+        return lines.some(l => /^返回商家$/.test(l) || l.includes('支付成功'));
     },
     parse(lines) {
-        const result = findAmountLine(
-            lines,
-            /^[··¥￥\s]*([\d]+\.[\d]{1,2})\s*$/,
-            /[··¥￥]?\s*([\d]+(?:\.[\d]{1,2})?)/
-        );
-        if (!result) return null;
-        const merchant = findMerchantAbove(lines, result.idx);
+        // 从后往前找最后一个金额行，一个截图可能含多笔记录，只取最后一笔
+        let amountLineIdx = -1;
+        let amount = 0;
+        for (let i = lines.length - 1; i >= 0; i--) {
+            const m = lines[i].match(/^[··¥￥\-\s]*([\d]+\.[\d]{1,2})\s*$/);
+            if (m) {
+                const val = parseFloat(m[1]);
+                if (val > 0) { amount = val; amountLineIdx = i; break; }
+            }
+        }
+        if (amountLineIdx === -1 || amount <= 0) return null;
+        const merchant = findMerchantAbove(lines, amountLineIdx);
         if (!merchant) return null;
-        return { time: extractTime(lines), merchant, amount: result.amount };
+        return { time: extractTime(lines), merchant, amount };
     }
 };
 
@@ -180,11 +190,11 @@ const wechatHistoryParser: BillParser = {
         const cutoff = lines.findIndex(l => l.includes('我的账单'));
         const searchLines = cutoff > 0 ? lines.slice(0, cutoff) : lines;
 
-        // 从后往前找最后一个金额行（·10.00 格式）
+        // 从后往前找最后一个金额行（·10.00 或 -10.00 格式）
         let amountLineIdx = -1;
         let amount = 0;
         for (let i = searchLines.length - 1; i >= 0; i--) {
-            const m = searchLines[i].match(/^[··¥￥\s]*([\d]+\.[\d]{1,2})\s*$/);
+            const m = searchLines[i].match(/^[··¥￥\-\s]*([\d]+\.[\d]{1,2})\s*$/);
             if (m) {
                 const val = parseFloat(m[1]);
                 if (val > 0) { amount = val; amountLineIdx = i; break; }
@@ -192,13 +202,15 @@ const wechatHistoryParser: BillParser = {
         }
         if (amountLineIdx === -1 || amount <= 0) return null;
 
-        // 向上找商户名，跳过付款方式行（「使用XX支付」）和噪声行
+        // 向上找商户名，跳过付款方式行（「使用XX支付」）、交易状态和噪声行
         const skipPatterns = [
             /^使用.+支付$/,
             /^账单详情/,
             /^\d{1,3}$/,
             /^[45]G$/i,
             /^[•·…\-\s]+$/,
+            /^交易状态/,
+            /^(已转账|已退款|已收款|待确认|已关闭|对方已收款)/,
         ];
         let merchant = '';
         for (let i = amountLineIdx - 1; i >= 0; i--) {
@@ -270,47 +282,103 @@ const ccbNotificationParser: BillParser = {
     }
 };
 
-// ── 支付宝解析器（占位，待补充特征和解析逻辑） ───────────────────────────────
-// TODO: 等收到支付宝文字格式后补充 detect() 和 parse() 实现
+// ── 支付宝完成页解析器 ────────────────────────────────────────────────────────
+// 特征：同时含「完成」和「付款方式」（微信完成页无「付款方式」字段）
+// 结构：商户简称 → 完成 → ·金额 → 商户全名 → 付款方式 → ·金额 → 银行卡
 const alipayBillParser: BillParser = {
-    detect(_lines) {
-        return false;
+    detect(lines) {
+        return lines.some(l => /^完成$/.test(l)) &&
+               lines.some(l => /^付款方式$/.test(l));
     },
-    parse(_lines) {
-        return null;
+    parse(lines) {
+        // 找「完成」行之后的第一个金额行
+        const doneIdx = lines.findIndex(l => /^完成$/.test(l));
+        if (doneIdx === -1) return null;
+
+        let amountLineIdx = -1;
+        let amount = 0;
+        for (let i = doneIdx + 1; i < lines.length; i++) {
+            const m = lines[i].match(/^[··¥￥\-\s]*([\d]+\.[\d]{1,2})\s*$/);
+            if (m) {
+                const val = parseFloat(m[1]);
+                if (val > 0) { amount = val; amountLineIdx = i; break; }
+            }
+        }
+        if (!amount || amountLineIdx === -1) return null;
+
+        // 商户全名在金额行和「付款方式」行之间
+        const payMethodIdx = lines.findIndex((l, i) => i > amountLineIdx && /^付款方式$/.test(l));
+        let merchant = '';
+        if (payMethodIdx > amountLineIdx + 1) {
+            // 取金额行和付款方式之间的第一个非空行
+            for (let i = amountLineIdx + 1; i < payMethodIdx; i++) {
+                const line = lines[i];
+                if (line && !/^\d{1,3}$/.test(line) && !/^[•·…\-\s]+$/.test(line)) {
+                    merchant = line;
+                    break;
+                }
+            }
+        }
+        // 兜底：如果中间没找到，取「完成」上方的商户名
+        if (!merchant) {
+            merchant = findMerchantAbove(lines, doneIdx);
+        }
+        if (!merchant) return null;
+
+        return { time: extractTime(lines), merchant, amount };
     }
 };
 
 // ── 解析器注册表（按优先级排列，顺序即匹配顺序） ──────────────────────────────
-const BILL_PARSERS: Array<{ platform: PaymentPlatform; parser: BillParser }> = [
-    { platform: 'wechat', parser: wechatBillParser },
-    { platform: 'wechat', parser: wechatHistoryParser },
-    { platform: 'ccb',    parser: ccbNotificationParser },
-    { platform: 'alipay', parser: alipayBillParser },
+const BILL_PARSERS: Array<{ source: BillSource; parser: BillParser }> = [
+    { source: 'wechat_history', parser: wechatHistoryParser },
+    { source: 'alipay',         parser: alipayBillParser },
+    { source: 'wechat_bill',    parser: wechatBillParser },
+    { source: 'ccb',            parser: ccbNotificationParser },
 ];
 
 // ── 入口函数 ──────────────────────────────────────────────────────────────────
 
 /**
- * 从 OCR 文字内容中识别支付平台并解析账单信息。
- * 返回 null 表示无法识别平台；BillInfo.platform === 'unknown' 表示识别到但解析失败。
+ * 从 OCR 文字内容中识别截图页面类型并解析账单信息。
+ * 返回 null 表示无法识别页面类型。
  */
 function parseBillContent(content: string): BillInfo | null {
     const lines = content.split('\n').map(l => l.trim()).filter(l => l.length > 0);
     if (lines.length === 0) return null;
 
-    for (const { platform, parser } of BILL_PARSERS) {
+    for (const { source, parser } of BILL_PARSERS) {
         if (!parser.detect(lines)) continue;
         const result = parser.parse(lines);
         if (!result) {
-            // 平台识别成功但解析失败
-            return { platform, time: '', merchant: '', amount: 0, rawText: content };
+            // 页面识别成功但解析失败
+            return { source, time: '', merchant: '', amount: 0, rawText: content };
         }
-        return { platform, rawText: content, ...result };
+        return { source, rawText: content, ...result };
     }
 
-    // 未能识别任何平台
+    // 未能识别任何页面类型
     return null;
+}
+
+/** 根据商户名自动匹配分类和描述 */
+function matchMerchantCategory(config: AccountingConfig, merchant: string): { keyword: string; description: string } {
+    const merchantMap: Record<string, any> = config.billMerchantMap || {};
+    for (const [pattern, entry] of Object.entries(merchantMap)) {
+        if (!merchant.includes(pattern)) continue;
+        if (typeof entry === 'string') {
+            return { keyword: entry, description: '' };
+        }
+        return {
+            keyword: entry.category || '',
+            description: entry.description ?? '',
+        };
+    }
+    const cleanedMerchant = merchant.replace(/[（(][^）)]*[）)]/g, '').trim();
+    return {
+        keyword: config.defaultCategory || Object.keys(config.categories)[0] || '',
+        description: cleanedMerchant,
+    };
 }
 
 // 记账记录解析器
@@ -2523,26 +2591,7 @@ class BillImportModal extends Modal {
     }
 
     autoMatch(merchant: string): { keyword: string; description: string } {
-        const merchantMap: Record<string, any> = this.plugin.config.billMerchantMap || {};
-        for (const [pattern, entry] of Object.entries(merchantMap)) {
-            if (!merchant.includes(pattern)) continue;
-            // 兼容旧格式（entry 为字符串）和新格式（entry 为对象）
-            if (typeof entry === 'string') {
-                return { keyword: entry, description: '' };
-            }
-            return {
-                keyword: entry.category || '',
-                description: entry.description ?? '',
-            };
-        }
-        // 未命中：用商户名作为默认描述，去掉括号及括号内内容（隐藏私人账户真实姓名）
-        // 支持全角括号（）和半角括号()
-        const cleanedMerchant = merchant.replace(/[（(][^）)]*[）)]/g, '').trim();
-        return {
-            keyword: this.plugin.config.defaultCategory ||
-                Object.keys(this.plugin.config.categories)[0] || '',
-            description: cleanedMerchant,
-        };
+        return matchMerchantCategory(this.plugin.config, merchant);
     }
 
     onOpen() {
@@ -2550,13 +2599,14 @@ class BillImportModal extends Modal {
         contentEl.empty();
         contentEl.addClass('bill-import-modal');
 
-        const platformMeta: Record<PaymentPlatform, { label: string; cls: string }> = {
-            wechat:  { label: '微信支付',     cls: 'bill-platform-wechat' },
-            alipay:  { label: '支付宝',       cls: 'bill-platform-alipay' },
-            ccb:     { label: '建设银行',     cls: 'bill-platform-ccb' },
-            unknown: { label: '未知平台',     cls: 'bill-platform-unknown' },
+        const sourceMeta: Record<BillSource, { label: string; cls: string }> = {
+            wechat_bill:    { label: '微信支付完成页', cls: 'bill-platform-wechat' },
+            wechat_history: { label: '微信支付账单页', cls: 'bill-platform-wechat' },
+            alipay:         { label: '支付宝完成页',   cls: 'bill-platform-alipay' },
+            ccb:            { label: '建设银行动账提醒', cls: 'bill-platform-ccb' },
+            unknown:        { label: '未知页面',       cls: 'bill-platform-unknown' },
         };
-        const meta = platformMeta[this.billInfo.platform];
+        const meta = sourceMeta[this.billInfo.source];
         this.titleEl.setText('账单导入');
 
         // ── 收据卡片 ──────────────────────────────────────────────
@@ -3788,21 +3838,68 @@ export default class AccountingPlugin extends Plugin {
 
         const billInfo = parseBillContent(lastSection);
 
-        // 完全未识别任何支付平台
+        // 完全未识别任何页面类型
         if (!billInfo) {
             await deleteBill();
-            new Notice('⚠️ 无法识别支付平台，目前支持：微信支付。', 5000);
+            new Notice('⚠️ 无法识别截图类型，目前支持：微信支付完成页、微信支付账单页、建设银行动账提醒。', 5000);
             return;
         }
 
-        // 识别到平台但字段解析失败（金额/商户缺失）
+        // 识别到页面类型但字段解析失败（金额/商户缺失）
         if (!billInfo.merchant || billInfo.amount <= 0) {
             await deleteBill();
-            const platformName = billInfo.platform === 'wechat' ? '微信支付'
-                : billInfo.platform === 'alipay' ? '支付宝'
-                : billInfo.platform === 'ccb' ? '建设银行'
-                : '未知平台';
-            new Notice(`⚠️ 识别到 ${platformName} 账单，但解析金额/商户失败。`, 5000);
+            const sourceMeta: Record<BillSource, string> = {
+                wechat_bill: '微信支付完成页',
+                wechat_history: '微信支付账单页',
+                alipay: '支付宝',
+                ccb: '建设银行动账提醒',
+                unknown: '未知页面',
+            };
+            new Notice(`⚠️ 识别到「${sourceMeta[billInfo.source]}」，但解析金额/商户失败。`, 5000);
+            return;
+        }
+
+        // 静默记账：识别成功后直接写入日记，不弹确认框
+        if (this.config.silentBillImport) {
+            const { keyword, description } = matchMerchantCategory(this.config, billInfo.merchant);
+            const emoji = this.config.expenseEmoji;
+            const recordLine = `- ${emoji}${keyword}${description ? ' ' + description : ''} ${billInfo.amount}`;
+            const today = formatLocalDate(new Date());
+            const journalPath = `${this.config.journalsPath}/${today}.md`;
+
+            try {
+                const file = this.app.vault.getAbstractFileByPath(journalPath);
+                if (file instanceof TFile) {
+                    let fileContent = await this.app.vault.read(file);
+                    const lines = fileContent.split('\n');
+                    while (lines.length > 0 && (lines[lines.length - 1].trim() === '' || lines[lines.length - 1].trim() === '-')) {
+                        lines.pop();
+                    }
+                    let newContent = lines.join('\n');
+                    newContent = newContent.length > 0 ? newContent + '\n' + recordLine : recordLine;
+                    await this.app.vault.modify(file, newContent);
+                } else {
+                    await this.app.vault.create(journalPath, recordLine);
+                }
+                await deleteBill();
+                new Notice(`✅ 静默记账：${keyword} ${description || billInfo.merchant} ${billInfo.amount}`);
+                await this.refreshData();
+                // 打开今日日记文件
+                const journalFile = this.app.vault.getAbstractFileByPath(journalPath);
+                if (journalFile instanceof TFile) {
+                    const leaves = this.app.workspace.getLeavesOfType('markdown');
+                    const existingLeaf = leaves.find((leaf: any) => leaf.view?.file?.path === journalPath);
+                    if (existingLeaf) {
+                        this.app.workspace.setActiveLeaf(existingLeaf);
+                    } else {
+                        const leaf = this.app.workspace.getLeaf();
+                        await leaf.openFile(journalFile);
+                    }
+                }
+            } catch (error: any) {
+                console.error('[bill-import] 静默记账写入失败:', error);
+                new Notice('❌ 静默记账写入失败，bill.md 已保留：' + error.message);
+            }
             return;
         }
 
@@ -3940,6 +4037,17 @@ class AccountingSettingTab extends PluginSettingTab {
 
         // ── 账单导入（bill.md）商户分类配置 ──────────────────────────────────
         containerEl.createEl('h3', { text: '账单导入 - 商户自动分类' });
+
+        new Setting(containerEl)
+            .setName('静默记账')
+            .setDesc('开启后，截图账单识别成功时不弹确认框，直接写入今日日记。适合快捷指令自动化场景。')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.config.silentBillImport === true)
+                .onChange(async (value) => {
+                    this.plugin.config.silentBillImport = value;
+                    await this.plugin.saveConfig();
+                }));
+
         containerEl.createEl('p', {
             text: '每行一条，格式：商户关键字=分类关键词=描述（描述可省略）。执行「从账单导入记账」命令时，自动根据识别到的商户名匹配分类和描述。',
             cls: 'setting-item-description'
