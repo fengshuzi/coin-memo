@@ -43,9 +43,10 @@ try {
   console.log(`📄 检测到 main.js: ${mainJsPath}\n`);
 
   // 4. 检测其他文件
-  const files = [mainJsPath, 'manifest.json'];
-  if (existsSync('styles.css')) files.push('styles.css');
-  if (existsSync('config.json')) files.push('config.json');
+  const manifestPath = existsSync('dist/manifest.json') ? 'dist/manifest.json' : 'manifest.json';
+  const stylesPath = existsSync('dist/styles.css') ? 'dist/styles.css' : 'styles.css';
+  const files = [mainJsPath, manifestPath];
+  if (existsSync(stylesPath)) files.push(stylesPath);
   
   console.log(`📦 将上传文件: ${files.join(', ')}\n`);
 
