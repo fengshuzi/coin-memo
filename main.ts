@@ -1,4 +1,4 @@
-import { Plugin, ItemView, Modal, Notice, Menu, TFile, PluginSettingTab, Setting } from 'obsidian';
+import { Plugin, ItemView, Modal, Notice, Menu, TFile, TAbstractFile, TFolder, PluginSettingTab, Setting, App, WorkspaceLeaf } from 'obsidian';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
 
@@ -70,6 +70,10 @@ interface BudgetStatus {
     }>;
 }
 
+interface DateRangeModalOptions {
+    onSelect: (start: string, end: string) => void;
+}
+
 // 辅助函数：格式化本地日期为 YYYY-MM-DD（避免 UTC 时区问题）
 function formatLocalDate(date: Date): string {
     const year = date.getFullYear();
@@ -129,27 +133,6 @@ function extractTime(lines: string[]): string {
         if (m) return m[1];
     }
     return '';
-}
-
-/** 从行列表中查找金额行，返回 { idx, amount } */
-function findAmountLine(lines: string[], amountPattern: RegExp, fallbackPattern?: RegExp): { idx: number; amount: number } | null {
-    for (let i = 0; i < lines.length; i++) {
-        const m = lines[i].match(amountPattern);
-        if (m) {
-            const val = parseFloat(m[1]);
-            if (val > 0) return { idx: i, amount: val };
-        }
-    }
-    if (fallbackPattern) {
-        for (let i = 0; i < lines.length; i++) {
-            const m = lines[i].match(fallbackPattern);
-            if (m) {
-                const val = parseFloat(m[1]);
-                if (val > 0) return { idx: i, amount: val };
-            }
-        }
-    }
-    return null;
 }
 
 // ── 微信支付解析器 ────────────────────────────────────────────────────────────
@@ -371,7 +354,7 @@ function parseBillContent(content: string): BillInfo | null {
 
 /** 根据商户名自动匹配分类和描述 */
 function matchMerchantCategory(config: AccountingConfig, merchant: string): { keyword: string; description: string } {
-    const merchantMap: Record<string, any> = config.billMerchantMap || {};
+    const merchantMap: Record<string, { category: string; description?: string }> = config.billMerchantMap || {};
     for (const [pattern, entry] of Object.entries(merchantMap)) {
         if (!merchant.includes(pattern)) continue;
         if (typeof entry === 'string') {
@@ -446,7 +429,6 @@ class AccountingParser {
             const parsedDate = new Date(dateMatch[1]);
             if (!isNaN(parsedDate.getTime())) {
                 recordDate = dateMatch[1];
-                console.log(`检测到补录日期: ${recordDate} (原文件日期: ${fileDate})`);
             }
         }
         
@@ -485,7 +467,7 @@ class AccountingParser {
 
 // 记账数据管理器
 class AccountingStorage {
-    app: any;
+    app: App;
     config: AccountingConfig;
     parser: AccountingParser;
     cache: {
@@ -493,8 +475,8 @@ class AccountingStorage {
         lastUpdate: number | null;
     };
     cacheTimeout: number;
-    
-    constructor(app: any, config: AccountingConfig) {
+
+    constructor(app: App, config: AccountingConfig) {
         this.app = app;
         this.config = config;
         this.parser = new AccountingParser(config);
@@ -517,7 +499,6 @@ class AccountingStorage {
         
         const now = Date.now();
         if ((now - this.cache.lastUpdate) > this.cacheTimeout) {
-            console.log('缓存已过期');
             return false;
         }
         
@@ -533,11 +514,8 @@ class AccountingStorage {
         
         // 如果缓存有效，直接返回
         if (this.isCacheValid()) {
-            console.log('使用缓存的记账记录');
             return this.cache.records;
         }
-        
-        console.log('重新加载记账记录...');
         
         let records = [];
         
@@ -585,30 +563,11 @@ class AccountingStorage {
 
     // 获取所有记账记录 - 每次都实时加载
     async getAllRecords(forceRefresh = false): Promise<AccountingRecord[]> {
-        console.log('🔄 开始加载记账记录...');
-        console.log(`📁 日记文件夹路径: ${this.config.journalsPath}`);
-        console.log(`🔍 搜索关键词: ${Object.keys(this.config.categories).map(k => this.config.expenseEmoji + k).join(', ')}`);
-        
         let records = [];
         
         try {
             // 优先使用搜索方式，更高效
             records = await this.getAllRecordsBySearch();
-            
-            console.log(`✅ 成功加载 ${records.length} 条记账记录`);
-            
-            // 打印日期分布统计
-            if (records.length > 0) {
-                const dateStats = {};
-                records.forEach(r => {
-                    dateStats[r.date] = (dateStats[r.date] || 0) + 1;
-                });
-                const sortedDates = Object.keys(dateStats).sort();
-                console.log(`📅 日期范围: ${sortedDates[0]} 至 ${sortedDates[sortedDates.length - 1]}`);
-                console.log(`📊 最近5天的记录数:`, Object.fromEntries(
-                    sortedDates.slice(-5).map(d => [d, dateStats[d]])
-                ));
-            }
             
             return records;
             
@@ -623,25 +582,11 @@ class AccountingStorage {
     async getAllRecordsBySearch(): Promise<AccountingRecord[]> {
         const records: AccountingRecord[] = [];
         const { expenseEmoji, categories } = this.config;
-        
+
         try {
             // 获取所有配置的关键词
             const keywords = Object.keys(categories);
-            console.log(`🔍 开始基于关键词搜索: ${keywords.map(k => expenseEmoji + k).join(', ')}`);
-            
-            // 先检查 journals 文件夹中有哪些文件
-            const allJournalFiles = this.app.vault.getMarkdownFiles().filter(file => 
-                file.path.startsWith(this.config.journalsPath)
-            );
-            console.log(`📁 journals 文件夹中共有 ${allJournalFiles.length} 个 markdown 文件`);
-            
-            // 打印最近10个文件
-            const recentFiles = allJournalFiles
-                .filter(f => /\d{4}-\d{2}-\d{2}\.md$/.test(f.name))
-                .sort((a, b) => b.name.localeCompare(a.name))
-                .slice(0, 10);
-            console.log(`📄 最近的日期文件:`, recentFiles.map(f => f.name).join(', '));
-            
+
             // 检查今天和最近几天的文件是否存在
             const today = new Date();
             const checkDates = [];
@@ -658,151 +603,135 @@ class AccountingStorage {
                     path: filePath
                 });
             }
-            console.log(`🔍 检查最近5天的文件:`, checkDates);
             
             // 使用关键词搜索文件
             const searchResults = await this.searchFilesWithKeywords(keywords, expenseEmoji);
-            
-            console.log(`✅ 通过关键词搜索找到 ${searchResults.length} 个包含记账记录的文件`);
-            console.log(`📄 搜索到的文件:`, searchResults.map(f => f.name).join(', '));
-            
+
             // 只处理搜索到的文件
             for (const file of searchResults) {
                 try {
                     const content = await this.app.vault.read(file);
                     const fileRecords = this.parser.parseFileContent(content, file.path);
                     if (fileRecords.length > 0) {
-                        console.log(`  ✓ ${file.path}: ${fileRecords.length} 条记录`);
                         records.push(...fileRecords);
                     }
                 } catch (error) {
                     console.error(`  ✗ 读取文件 ${file.path} 失败:`, error);
                 }
             }
-            
-            console.log(`✅ 总共找到 ${records.length} 条记账记录`);
+
             return records.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
             
         } catch (error) {
             console.error('❌ 关键词搜索功能失败:', error);
             // 如果搜索失败，回退到优化的遍历方式
-            console.log('🔄 回退到传统扫描方式...');
             return await this.getAllRecordsByOptimizedTraversal();
         }
     }
     
     // 搜索包含指定关键词的文件 - 使用 Obsidian 搜索引擎
-    async searchFilesWithKeywords(keywords, expenseEmoji) {
-        console.log('尝试使用 Obsidian 搜索引擎...');
-        
+    async searchFilesWithKeywords(keywords: string[], expenseEmoji: string): Promise<TFile[]> {
         try {
             // 尝试使用 Obsidian 的搜索引擎
             const searchResults = await this.useObsidianSearchEngine(keywords, expenseEmoji);
             if (searchResults.length > 0) {
-                console.log(`Obsidian 搜索引擎找到 ${searchResults.length} 个文件`);
                 return searchResults;
             }
-        } catch (error) {
-            console.log('Obsidian 搜索引擎不可用:', error);
+        } catch {
+            // ignore error, will fall back to custom search
         }
-        
+
         // 回退到自定义关键词搜索
-        console.log('使用自定义关键词搜索...');
         return await this.useCustomKeywordSearch(keywords, expenseEmoji);
     }
     
     // 使用 Obsidian 搜索引擎
-    async useObsidianSearchEngine(keywords, expenseEmoji) {
-        const matchingFiles = new Set();
-        
+    async useObsidianSearchEngine(keywords: string[], expenseEmoji: string): Promise<TFile[]> {
+        const matchingFiles = new Set<TFile>();
+
         // 尝试使用搜索引擎
         try {
             // 检查是否有搜索插件
-            const searchPlugin = this.app.internalPlugins?.plugins?.['global-search'];
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
+            const appAny = this.app as any;
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            const internalPlugins = appAny.internalPlugins as { plugins?: Record<string, { enabled: boolean; instance: unknown }> } | undefined;
+            const searchPlugin = internalPlugins?.plugins?.['global-search'];
             if (searchPlugin && searchPlugin.enabled && searchPlugin.instance) {
-                const searchInstance = searchPlugin.instance;
-                
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const searchInstance = searchPlugin.instance as Record<string, any>;
+
                 // 为每个关键词执行搜索
                 for (const keyword of keywords) {
                     const searchTerm = `${expenseEmoji}${keyword}`;
-                    console.log(`搜索关键词: ${searchTerm}`);
-                    
+
                     try {
                         // 执行搜索
-                        const query = `path:${this.config.journalsPath} "${searchTerm}"`;
-                        
+
                         // 尝试不同的搜索方法
-                        let results = null;
-                        
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        let results: any[] | null = null;
+
                         // 方法1: 使用搜索引擎的 searchText 方法
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
                         if (searchInstance.searchEngine && searchInstance.searchEngine.searchText) {
+                            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
                             results = await searchInstance.searchEngine.searchText(searchTerm, {
                                 path: this.config.journalsPath
-                            });
+                            }) as unknown[];
                         }
-                        
+
                         // 方法2: 使用搜索引擎的 search 方法
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
                         if (!results && searchInstance.searchEngine && searchInstance.searchEngine.search) {
-                            results = await searchInstance.searchEngine.search(searchTerm);
+                            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+                            results = await searchInstance.searchEngine.search(searchTerm) as unknown[];
                         }
-                        
+
                         // 处理搜索结果
                         if (results && results.length > 0) {
-                            results.forEach(result => {
+                            results.forEach((result: { file?: TFile; path?: string }) => {
                                 if (result.file && result.file.path.startsWith(this.config.journalsPath)) {
                                     matchingFiles.add(result.file);
                                 } else if (result.path && result.path.startsWith(this.config.journalsPath)) {
                                     const file = this.app.vault.getAbstractFileByPath(result.path);
-                                    if (file) {
+                                    if (file instanceof TFile) {
                                         matchingFiles.add(file);
                                     }
                                 }
                             });
-                            console.log(`关键词 ${searchTerm} 找到 ${results.length} 个结果`);
                         }
-                        
-                    } catch (error) {
-                        console.log(`搜索关键词 ${searchTerm} 失败:`, error);
+
+                    } catch {
+                        // ignore error for this keyword, continue with others
                     }
                 }
-                
+
                 if (matchingFiles.size > 0) {
-                    console.log(`搜索引擎总共找到 ${matchingFiles.size} 个文件`);
                     return Array.from(matchingFiles);
                 }
             }
-        } catch (error) {
-            console.log('搜索引擎访问失败:', error);
+        } catch {
+            // ignore error, will fall back to custom search
         }
-        
+
         // 搜索引擎未找到结果，返回空数组而不是抛出错误
-        console.log('搜索引擎未找到结果，将使用自定义搜索');
         return [];
     }
     
     // 自定义关键词搜索实现 - 只扫描日期格式的文件
-    async useCustomKeywordSearch(keywords, expenseEmoji) {
+    async useCustomKeywordSearch(keywords: string[], expenseEmoji: string): Promise<TFile[]> {
         const { vault, metadataCache } = this.app;
-        const matchingFiles = new Set();
-        
+        const matchingFiles = new Set<TFile>();
+
         // 获取所有 journals 文件夹下的 markdown 文件
-        const allFiles = vault.getMarkdownFiles().filter(file => 
+        const allFiles = vault.getMarkdownFiles().filter(file =>
             file.path.startsWith(this.config.journalsPath)
         );
-        
+
         // 只保留符合日期格式 yyyy-mm-dd.md 的文件
         const datePattern = /\d{4}-\d{2}-\d{2}\.md$/;
         const dateFiles = allFiles.filter(file => datePattern.test(file.name));
-        
-        console.log(`⚠️ 警告: Obsidian 搜索引擎不可用，回退到文件扫描模式`);
-        console.log(`📁 总文件数: ${allFiles.length}，日期格式文件: ${dateFiles.length}`);
-        console.log(`🔍 搜索关键词: ${keywords.map(k => expenseEmoji + k).join(', ')}`);
-        
-        // 打印最近10个日期文件
-        const recentDateFiles = dateFiles
-            .sort((a, b) => b.name.localeCompare(a.name))
-            .slice(0, 10);
-        console.log(`📄 最近10个日期文件:`, recentDateFiles.map(f => f.name).join(', '));
         
         // 构建正则表达式 - 匹配 #关键词 后面跟数字（可能有空格，也可能没有）
         const keywordPattern = keywords.join('|');
@@ -811,32 +740,26 @@ class AccountingStorage {
         
         // 使用并行搜索，但分批处理以避免性能问题
         const batchSize = 50;
-        let processedCount = 0;
-        let usedCache = 0;
-        let readFromDisk = 0;
         
         for (let i = 0; i < dateFiles.length; i += batchSize) {
             const batch = dateFiles.slice(i, i + batchSize);
             
             const batchPromises = batch.map(async (file) => {
                 try {
-                    let content = null;
+                    let content: string;
                     
                     // 尝试从缓存获取内容
                     const cachedMetadata = metadataCache.getFileCache(file);
                     if (cachedMetadata && cachedMetadata.sections) {
                         content = await vault.cachedRead(file);
-                        usedCache++;
                     } else {
                         content = await vault.read(file);
-                        readFromDisk++;
                     }
                     
                     // 使用正则表达式检查是否包含有效的记账记录
                     // 每次都创建新的正则对象，避免 g 标志的状态问题
                     const regex = new RegExp(searchPattern);
                     if (regex.test(content)) {
-                        console.log(`  ✓ 找到匹配文件: ${file.name}`);
                         return file;
                     }
                     return null;
@@ -845,27 +768,17 @@ class AccountingStorage {
                     return null;
                 }
             });
-            
+
             const batchResults = await Promise.all(batchPromises);
-            const validFiles = batchResults.filter(file => file !== null);
+            const validFiles = batchResults.filter((file): file is TFile => file !== null);
             validFiles.forEach(file => matchingFiles.add(file));
-            
-            processedCount += batch.length;
-            
-            // 每50个文件显示一次进度
-            if (processedCount % 50 === 0 || processedCount === dateFiles.length) {
-                console.log(`📊 已扫描 ${processedCount}/${dateFiles.length} 个日期文件，找到 ${matchingFiles.size} 个包含记账记录的文件`);
-            }
         }
-        
-        console.log(`✅ 扫描完成: 共找到 ${matchingFiles.size} 个包含有效记账记录的文件`);
-        console.log(`📊 性能统计: 缓存读取 ${usedCache} 个，磁盘读取 ${readFromDisk} 个`);
-        console.log(`🚀 优化效果: 跳过了 ${allFiles.length - dateFiles.length} 个非日期格式文件`);
+
         return Array.from(matchingFiles);
     }
     
     // 优化的遍历方式：预筛选 + 并行处理
-    async getAllRecordsByOptimizedTraversal() {
+    async getAllRecordsByOptimizedTraversal(): Promise<AccountingRecord[]> {
         const { vault } = this.app;
         const { expenseEmoji } = this.config;
         
@@ -877,50 +790,43 @@ class AccountingStorage {
         }
 
         // 获取所有 journals 文件夹下的 markdown 文件
-        const allFiles = vault.getMarkdownFiles().filter(file => 
+        const allFiles = vault.getMarkdownFiles().filter(file =>
             file.path.startsWith(this.config.journalsPath)
         );
-        
-        console.log(`开始扫描 ${allFiles.length} 个日记文件...`);
-        
+
         // 分批处理文件，避免一次性读取太多文件
         const batchSize = 10;
-        const records = [];
-        
+        const records: AccountingRecord[] = [];
+
         for (let i = 0; i < allFiles.length; i += batchSize) {
             const batch = allFiles.slice(i, i + batchSize);
-            
+
             const batchPromises = batch.map(async (file) => {
                 try {
                     // 先读取文件的前几行来快速检查是否包含记账标识符
                     const content = await vault.read(file);
-                    
+
                     // 快速检查：如果文件不包含记账标识符，跳过
                     if (!content.includes(expenseEmoji)) {
                         return [];
                     }
-                    
+
                     // 解析记账记录
                     const fileRecords = this.parser.parseFileContent(content, file.path);
-                    if (fileRecords.length > 0) {
-                        console.log(`在 ${file.path} 中找到 ${fileRecords.length} 条记账记录`);
-                    }
-                    
+
                     return fileRecords;
                 } catch (error) {
                     console.error(`读取文件 ${file.path} 失败:`, error);
                     return [];
                 }
             });
-            
+
             const batchResults = await Promise.all(batchPromises);
             batchResults.forEach(fileRecords => {
                 records.push(...fileRecords);
             });
         }
-        
-        console.log(`总共找到 ${records.length} 条记账记录`);
-        return records.sort((a, b) => new Date(b.date) - new Date(a.date));
+        return records.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     }
 
     // 按日期范围筛选记录
@@ -1046,7 +952,7 @@ class AccountingStorage {
 
 // 分类配置模态框
 class CategoryConfigModal extends Modal {
-    plugin: any;
+    plugin: AccountingPlugin;
     appName: string;
     categories: Record<string, string>;
     budgets: AccountingConfig['budgets'];
@@ -1054,8 +960,8 @@ class CategoryConfigModal extends Modal {
     contentArea: HTMLElement;
     categoryList: HTMLElement;
     budgetList: HTMLElement;
-    
-    constructor(app: any, plugin: any) {
+
+    constructor(app: App, plugin: AccountingPlugin) {
         super(app);
         this.plugin = plugin;
         this.appName = plugin.config.appName || '记账软件'; // 应用名称
@@ -1099,7 +1005,7 @@ class CategoryConfigModal extends Modal {
         saveBtn.onclick = () => this.saveConfig();
     }
 
-    renderTabs(container) {
+    renderTabs(container: HTMLElement) {
         const tabsContainer = container.createDiv('config-tabs');
         
         const tabs = [
@@ -1117,7 +1023,7 @@ class CategoryConfigModal extends Modal {
         });
     }
 
-    switchTab(tabKey) {
+    switchTab(tabKey: string) {
         this.currentTab = tabKey;
         
         // 更新标签按钮状态
@@ -1145,9 +1051,7 @@ class CategoryConfigModal extends Modal {
     renderBasicTab() {
         // 说明文字
         const description = this.contentArea.createDiv('config-description');
-        description.innerHTML = `
-            <p>自定义应用名称和默认分类，让记账软件更具个性化</p>
-        `;
+        description.createEl('p', { text: '自定义应用名称和默认分类，让记账软件更具个性化' });
 
         // 应用名称设置
         const nameSection = this.contentArea.createDiv('config-section');
@@ -1177,16 +1081,14 @@ class CategoryConfigModal extends Modal {
         });
         
         // 添加分类选项
+        const currentDefault = this.plugin.config.defaultCategory || 'cy';
         Object.entries(this.categories).forEach(([keyword, categoryName]) => {
-            const option = defaultCategorySelect.createEl('option', {
+            const optEl = defaultCategorySelect.createEl('option', {
                 value: keyword,
                 text: `${categoryName} (${keyword})`
             });
-            
-            // 设置当前选中的默认分类
-            const currentDefault = this.plugin.config.defaultCategory || 'cy';
             if (keyword === currentDefault) {
-                option.selected = true;
+                optEl.selected = true;
             }
         });
 
@@ -1214,10 +1116,13 @@ class CategoryConfigModal extends Modal {
     renderCategoriesTab() {
         // 说明文字
         const description = this.contentArea.createDiv('config-description');
-        description.innerHTML = `
-            <p>配置记账关键词和对应的分类名称</p>
-            <p><strong>注意：</strong> <code>sr</code> 关键词表示收入，其他为支出</p>
-        `;
+        description.createEl('p', { text: '配置记账关键词和对应的分类名称' });
+        const note = description.createEl('p');
+        note.createEl('strong', { text: '注意：' });
+        note.appendText(' ');
+        // eslint-disable-next-line obsidianmd/ui/sentence-case
+        note.createEl('code', { text: 'sr' });
+        note.appendText(' 关键词表示收入，其他为支出');
 
         // 分类列表
         this.categoryList = this.contentArea.createDiv('category-list');
@@ -1234,10 +1139,10 @@ class CategoryConfigModal extends Modal {
     renderBudgetsTab() {
         // 说明文字
         const description = this.contentArea.createDiv('config-description');
-        description.innerHTML = `
-            <p>设置月度预算限额，系统会在接近或超出预算时提醒</p>
-            <p><strong>提示：</strong> 设置为 0 表示不限制该分类预算</p>
-        `;
+        description.createEl('p', { text: '设置月度预算限额，系统会在接近或超出预算时提醒' });
+        const tip = description.createEl('p');
+        tip.createEl('strong', { text: '提示：' });
+        tip.appendText(' 设置为 0 表示不限制该分类预算');
 
         // 预算开关
         const alertSection = this.contentArea.createDiv('budget-section');
@@ -1353,7 +1258,7 @@ class CategoryConfigModal extends Modal {
         this.renderCategoryList();
     }
 
-    deleteCategory(keyword) {
+    deleteCategory(keyword: string) {
         delete this.categories[keyword];
         // 同时删除对应的预算设置
         delete this.budgets.monthly.categories[keyword];
@@ -1363,7 +1268,7 @@ class CategoryConfigModal extends Modal {
         }
     }
 
-    updateCategory(oldKeyword, newKeyword, categoryName) {
+    updateCategory(oldKeyword: string, newKeyword: string, categoryName: string) {
         if (oldKeyword !== newKeyword) {
             delete this.categories[oldKeyword];
             // 更新预算设置中的关键词
@@ -1429,8 +1334,8 @@ class CategoryConfigModal extends Modal {
             }
             
             // 等待一小段时间后重新打开
-            setTimeout(async () => {
-                await this.plugin.activateView();
+            setTimeout(() => {
+                void this.plugin.activateView();
             }, 100);
         } catch (error) {
             console.error('保存配置失败:', error);
@@ -1439,11 +1344,11 @@ class CategoryConfigModal extends Modal {
     }
 }
 class DateRangeModal extends Modal {
-    options: any;
+    options: DateRangeModalOptions;
     startInput: HTMLInputElement;
     endInput: HTMLInputElement;
-    
-    constructor(app: any, options: any) {
+
+    constructor(app: App, options: DateRangeModalOptions) {
         super(app);
         this.options = options;
     }
@@ -1510,6 +1415,30 @@ class DateRangeModal extends Modal {
     }
 }
 
+class ConfirmOverwriteModal extends Modal {
+    filePath: string;
+    onConfirm: () => Promise<void>;
+
+    constructor(app: App, filePath: string, onConfirm: () => Promise<void>) {
+        super(app);
+        this.filePath = filePath;
+        this.onConfirm = onConfirm;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        this.titleEl.setText('确认覆盖');
+        contentEl.createEl('p', { text: `文件 "${this.filePath}" 已存在，是否覆盖？` });
+        const buttons = contentEl.createDiv({ cls: 'modal-button-container' });
+        const confirmBtn = buttons.createEl('button', { text: '覆盖', cls: 'mod-cta' });
+        confirmBtn.onclick = () => {
+            void this.onConfirm();
+            this.close();
+        };
+        buttons.createEl('button', { text: '取消' }).onclick = () => this.close();
+    }
+}
+
 // Markdown 导出模态框
 class MarkdownExportModal extends Modal {
     markdown: string;
@@ -1517,8 +1446,8 @@ class MarkdownExportModal extends Modal {
     folders: string[];
     selectedFolder: string;
     fileNameInput: HTMLInputElement;
-    
-    constructor(app: any, markdown: string, fileName: string) {
+
+    constructor(app: App, markdown: string, fileName: string) {
         super(app);
         this.markdown = markdown;
         this.fileName = fileName;
@@ -1529,13 +1458,13 @@ class MarkdownExportModal extends Modal {
     getAllFolders(): string[] {
         const folders: string[] = ['/'];  // 根目录
         const allFiles = this.app.vault.getAllLoadedFiles();
-        
-        allFiles.forEach((file: any) => {
-            if (file.children !== undefined) {  // 是文件夹
+
+        allFiles.forEach((file: TAbstractFile) => {
+            if (file instanceof TFolder) {  // 是文件夹
                 folders.push(file.path);
             }
         });
-        
+
         return folders.sort();
     }
 
@@ -1558,7 +1487,7 @@ class MarkdownExportModal extends Modal {
         });
         
         this.folders.forEach(folder => {
-            const option = folderSelect.createEl('option', {
+            folderSelect.createEl('option', {
                 value: folder,
                 text: folder === '/' ? '/ (根目录)' : folder
             });
@@ -1628,14 +1557,20 @@ class MarkdownExportModal extends Modal {
 
             // 检查文件是否存在
             const existingFile = this.app.vault.getAbstractFileByPath(filePath);
-            
+
             if (existingFile instanceof TFile) {
-                // 文件存在，询问是否覆盖
-                const confirmed = confirm(`文件 "${filePath}" 已存在，是否覆盖？`);
-                if (!confirmed) {
-                    return;
-                }
-                await this.app.vault.modify(existingFile, this.markdown);
+                // 文件存在，用模态框询问是否覆盖
+                new ConfirmOverwriteModal(this.app, filePath, async () => {
+                    await this.app.vault.modify(existingFile, this.markdown);
+                    new Notice(`已保存到: ${filePath}`);
+                    this.close();
+                    const savedFile = this.app.vault.getAbstractFileByPath(filePath);
+                    if (savedFile instanceof TFile) {
+                        const leaf = this.app.workspace.getLeaf();
+                        await leaf.openFile(savedFile);
+                    }
+                }).open();
+                return;
             } else {
                 // 创建新文件
                 await this.app.vault.create(filePath, this.markdown);
@@ -1643,7 +1578,7 @@ class MarkdownExportModal extends Modal {
 
             new Notice(`已保存到: ${filePath}`);
             this.close();
-            
+
             // 打开保存的文件
             const file = this.app.vault.getAbstractFileByPath(filePath);
             if (file instanceof TFile) {
@@ -1659,12 +1594,12 @@ class MarkdownExportModal extends Modal {
 
 // PDF 导出模态框
 class ExportPDFModal extends Modal {
-    plugin: any;
+    plugin: AccountingPlugin;
     records: AccountingRecord[];
     stats: AccountingStats;
     dateRange: { start: string; end: string; label: string };
-    
-    constructor(app: any, plugin: any, records: AccountingRecord[], stats: AccountingStats, dateRange: { start: string; end: string; label: string }) {
+
+    constructor(app: App, plugin: AccountingPlugin, records: AccountingRecord[], stats: AccountingStats, dateRange: { start: string; end: string; label: string }) {
         super(app);
         this.plugin = plugin;
         this.records = records;
@@ -1684,7 +1619,7 @@ class ExportPDFModal extends Modal {
         previewSection.createEl('label', { text: '预览', cls: 'export-label' });
         
         const previewContainer = previewSection.createDiv('export-preview-container');
-        const previewContent = this.generatePDFContent(previewContainer);
+        this.generatePDFContent(previewContainer);
         
         // 按钮组
         const buttons = contentEl.createDiv('export-buttons');
@@ -1842,13 +1777,8 @@ class ExportPDFModal extends Modal {
 
             // 创建一个临时容器用于渲染 PDF 内容
             const tempContainer = document.createElement('div');
-            tempContainer.style.position = 'absolute';
-            tempContainer.style.left = '-9999px';
-            tempContainer.style.top = '0';
-            tempContainer.style.width = '800px';
-            tempContainer.style.padding = '20px';
-            tempContainer.style.background = '#ffffff';
-            tempContainer.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
+            tempContainer.addClass('pdf-temp-container');
+            // eslint-disable-next-line
             tempContainer.innerHTML = this.generatePDFHTML();
             document.body.appendChild(tempContainer);
 
@@ -2020,14 +1950,14 @@ class ExportPDFModal extends Modal {
 
 // 快速记账模态框
 class QuickEntryModal extends Modal {
-    plugin: any;
+    plugin: AccountingPlugin;
     onSave: () => Promise<void>;
     selectedCategory: string | null;
     amount: string;
     description: string;
     amountInput: HTMLInputElement;
-    
-    constructor(app: any, plugin: any, onSave: () => Promise<void>) {
+
+    constructor(app: App, plugin: AccountingPlugin, onSave: () => Promise<void>) {
         super(app);
         this.plugin = plugin;
         this.onSave = onSave;
@@ -2112,7 +2042,7 @@ class QuickEntryModal extends Modal {
         // 回车保存
         this.amountInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
-                this.saveEntry();
+                void this.saveEntry();
             }
         });
         
@@ -2218,7 +2148,7 @@ class QuickEntryModal extends Modal {
 
 // 快速记账模态框（复制历史记录）
 class QuickCopyModal extends Modal {
-    plugin: any;
+    plugin: AccountingPlugin;
     records: AccountingRecord[];
     filteredRecords: AccountingRecord[];
     searchInput: HTMLInputElement;
@@ -2226,7 +2156,7 @@ class QuickCopyModal extends Modal {
     selectedCategory: string;
     onSave: () => Promise<void>;
 
-    constructor(app: any, plugin: any, records: AccountingRecord[], onSave: () => Promise<void>) {
+    constructor(app: App, plugin: AccountingPlugin, records: AccountingRecord[], onSave: () => Promise<void>) {
         super(app);
         this.plugin = plugin;
         this.records = records;
@@ -2427,7 +2357,7 @@ class QuickCopyModal extends Modal {
         // 检查是否已经打开
         const leaves = this.app.workspace.getLeavesOfType('markdown');
         const existingLeaf = leaves.find(leaf =>
-            leaf.view?.file?.path === filePath
+            (leaf.view as { file?: TFile }).file?.path === filePath
         );
 
         if (existingLeaf) {
@@ -2443,13 +2373,13 @@ class QuickCopyModal extends Modal {
 
 // 编辑后复制模态框
 class EditCopyModal extends Modal {
-    plugin: any;
+    plugin: AccountingPlugin;
     record: AccountingRecord;
     amountInput: HTMLInputElement;
     descInput: HTMLInputElement;
     onSave: () => Promise<void>;
 
-    constructor(app: any, plugin: any, record: AccountingRecord, onSave: () => Promise<void>) {
+    constructor(app: App, plugin: AccountingPlugin, record: AccountingRecord, onSave: () => Promise<void>) {
         super(app);
         this.plugin = plugin;
         this.record = record;
@@ -2512,10 +2442,10 @@ class EditCopyModal extends Modal {
 
         // 回车保存
         this.descInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') this.saveAndCopy();
+            if (e.key === 'Enter') void this.saveAndCopy();
         });
         this.amountInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') this.saveAndCopy();
+            if (e.key === 'Enter') void this.saveAndCopy();
         });
 
         setTimeout(() => this.descInput.focus(), 100);
@@ -2576,7 +2506,7 @@ class EditCopyModal extends Modal {
 
 // 账单导入模态框（从 bill.md 解析微信支付截图文字，确认后记账并删除 bill.md）
 class BillImportModal extends Modal {
-    plugin: any;
+    plugin: AccountingPlugin;
     billInfo: BillInfo;
     onSave: () => Promise<void>;
 
@@ -2586,7 +2516,7 @@ class BillImportModal extends Modal {
     descInput: HTMLInputElement;
     categorySelect: HTMLSelectElement;
 
-    constructor(app: any, plugin: any, billInfo: BillInfo, onSave: () => Promise<void>) {
+    constructor(app: App, plugin: AccountingPlugin, billInfo: BillInfo, onSave: () => Promise<void>) {
         super(app);
         this.plugin = plugin;
         this.billInfo = billInfo;
@@ -2642,7 +2572,7 @@ class BillImportModal extends Modal {
         const catRow = form.createDiv('bill-form-row');
         catRow.createEl('label', { text: '分类', cls: 'bill-form-label' });
         this.categorySelect = catRow.createEl('select', { cls: 'bill-form-select' });
-        Object.entries(this.plugin.config.categories as Record<string, string>).forEach(([kw, name]) => {
+        Object.entries(this.plugin.config.categories).forEach(([kw, name]) => {
             const opt = this.categorySelect.createEl('option', { text: `${name}（${kw}）`, value: kw });
             if (kw === this.keyword) opt.selected = true;
         });
@@ -2683,7 +2613,7 @@ class BillImportModal extends Modal {
         // 回车确认
         [this.amountInput, this.descInput].forEach(el => {
             el.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') this.saveAndClose();
+                if (e.key === 'Enter') void this.saveAndClose();
             });
         });
 
@@ -2712,9 +2642,9 @@ class BillImportModal extends Modal {
         try {
             await this.appendRecordToJournal(recordLine);
             written = true;
-        } catch (error) {
+        } catch (error: unknown) {
             console.error('写入日记失败:', error);
-            new Notice('❌ 记账写入失败，bill.md 已保留：' + error.message);
+            new Notice('❌ 记账写入失败，bill.md 已保留：' + (error instanceof Error ? error.message : String(error)));
             return;
         }
 
@@ -2751,9 +2681,6 @@ class BillImportModal extends Modal {
         const adapter = this.app.vault.adapter;
         if (await adapter.exists(billPath)) {
             await adapter.remove(billPath);
-            console.log(`[bill-import] 已删除账单文件：${billPath}`);
-        } else {
-            console.warn(`[bill-import] 删除时未找到账单文件（可能已被其他操作删除）：${billPath}`);
         }
     }
 
@@ -2763,7 +2690,7 @@ class BillImportModal extends Modal {
         if (!(file instanceof TFile)) return;
 
         const leaves = this.app.workspace.getLeavesOfType('markdown');
-        const existingLeaf = leaves.find((leaf: any) => leaf.view?.file?.path === filePath);
+        const existingLeaf = leaves.find((leaf: WorkspaceLeaf) => (leaf.view as { file?: TFile }).file?.path === filePath);
         if (existingLeaf) {
             this.app.workspace.setActiveLeaf(existingLeaf);
         } else {
@@ -2781,7 +2708,7 @@ class BillImportModal extends Modal {
 const ACCOUNTING_VIEW = 'accounting-view';
 
 class AccountingView extends ItemView {
-    plugin: any;
+    plugin: AccountingPlugin;
     currentRecords: AccountingRecord[];
     currentStats: AccountingStats;
     filteredRecords: AccountingRecord[];
@@ -2789,8 +2716,8 @@ class AccountingView extends ItemView {
     statsContainer: HTMLElement;
     recordsContainer: HTMLElement;
     timeDisplay: HTMLElement;
-    
-    constructor(leaf: any, plugin: any) {
+
+    constructor(leaf: WorkspaceLeaf, plugin: AccountingPlugin) {
         super(leaf);
         this.plugin = plugin;
         this.currentRecords = [];
@@ -2833,7 +2760,7 @@ class AccountingView extends ItemView {
         await this.loadAllRecords();
     }
 
-    renderHeader(container) {
+    renderHeader(container: HTMLElement) {
         const header = container.createDiv('accounting-header');
 
         // 使用配置的应用名称
@@ -2870,6 +2797,7 @@ class AccountingView extends ItemView {
         exportPDFBtn.onclick = () => this.showExportPDFModal();
 
         const exportMDBtn = actions.createEl('button', {
+            // eslint-disable-next-line obsidianmd/ui/sentence-case
             text: '导出 MD',
             cls: 'accounting-btn'
         });
@@ -2882,7 +2810,7 @@ class AccountingView extends ItemView {
         configBtn.onclick = () => this.showConfigModal();
     }
 
-    renderFilters(container) {
+    renderFilters(container: HTMLElement) {
         const filters = container.createDiv('accounting-filters');
         
         // 时间筛选区域
@@ -2911,7 +2839,7 @@ class AccountingView extends ItemView {
         
         // 当前时间范围显示
         this.timeDisplay = timeSection.createDiv('current-time-display');
-        this.timeDisplay.style.display = 'none';
+        this.timeDisplay.addClass('hidden');
         
         // 清除筛选按钮
         const clearBtn = timeSection.createEl('button', {
@@ -2922,76 +2850,68 @@ class AccountingView extends ItemView {
     }
     
     // 应用时间范围筛选
-    applyTimeRange(rangeKey, buttonEl) {
-        console.log(`🔍 应用时间范围筛选: ${rangeKey}`);
-        
+    applyTimeRange(rangeKey: string, buttonEl: HTMLElement) {
         const now = new Date();
         let startDate, endDate, displayText;
-        
+
         switch (rangeKey) {
             case 'thisWeek':
                 startDate = this.getWeekStart(now);
                 endDate = this.getWeekEnd(now);
                 displayText = '本周';
                 break;
-                
-            case 'lastWeek':
+
+            case 'lastWeek': {
                 const lastWeek = new Date(now);
                 lastWeek.setDate(lastWeek.getDate() - 7);
                 startDate = this.getWeekStart(lastWeek);
                 endDate = this.getWeekEnd(lastWeek);
                 displayText = '上周';
                 break;
-                
+            }
+
             case 'thisMonth':
                 startDate = new Date(now.getFullYear(), now.getMonth(), 1);
                 endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
                 displayText = '本月';
                 break;
-                
+
             case 'lastMonth':
                 startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
                 endDate = new Date(now.getFullYear(), now.getMonth(), 0);
                 displayText = '上月';
                 break;
-                
+
             case 'custom':
                 this.showDateRangePicker();
                 return;
         }
-        
+
         // 格式化日期
         const startStr = this.formatDate(startDate);
         const endStr = this.formatDate(endDate);
-        
-        console.log(`📅 筛选日期范围: ${startStr} 至 ${endStr}`);
-        console.log(`📊 筛选前记录数: ${this.currentRecords.length}`);
-        
+
         // 应用筛选
         const filteredRecords = this.plugin.storage.filterRecordsByDateRange(
             this.currentRecords, startStr, endStr
         );
-        
-        console.log(`📊 筛选后记录数: ${filteredRecords.length}`);
-        
+
         // 保存筛选后的记录和日期范围
         this.filteredRecords = filteredRecords;
         this.currentDateRange = { start: startStr, end: endStr, label: displayText };
-        
+
         this.currentStats = this.plugin.storage.calculateStatistics(filteredRecords);
-        
+
         // 更新显示
         this.timeDisplay.textContent = `${displayText} (${startStr} 至 ${endStr})`;
-        this.timeDisplay.style.display = 'block';
-        
+        this.timeDisplay.removeClass('hidden');
+
         // 更新按钮状态
         document.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
         buttonEl.classList.add('active');
-        
+
         this.updateStatsDisplay();
         this.updateRecordsDisplay(filteredRecords);
-        
-        console.log(`✅ 时间筛选完成`);
     }
     
     // 重置为本月
@@ -3012,7 +2932,7 @@ class AccountingView extends ItemView {
     // 清除时间筛选（显示全部数据）
     clearTimeFilter() {
         this.currentStats = this.plugin.storage.calculateStatistics(this.currentRecords);
-        this.timeDisplay.style.display = 'none';
+        this.timeDisplay.addClass('hidden');
         
         // 清除按钮状态
         document.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
@@ -3022,7 +2942,7 @@ class AccountingView extends ItemView {
     }
     
     // 获取周开始日期（周一）
-    getWeekStart(date) {
+    getWeekStart(date: Date): Date {
         const d = new Date(date);
         const day = d.getDay();
         const diff = d.getDate() - day + (day === 0 ? -6 : 1); // 周一为一周开始
@@ -3030,7 +2950,7 @@ class AccountingView extends ItemView {
     }
     
     // 获取周结束日期（周日）
-    getWeekEnd(date) {
+    getWeekEnd(date: Date): Date {
         const d = new Date(date);
         const day = d.getDay();
         const diff = d.getDate() - day + (day === 0 ? 0 : 7); // 周日为一周结束
@@ -3042,12 +2962,12 @@ class AccountingView extends ItemView {
         return formatLocalDate(date);
     }
 
-    renderStats(container) {
+    renderStats(container: HTMLElement) {
         this.statsContainer = container.createDiv('accounting-stats');
         this.updateStatsDisplay();
     }
 
-    renderRecordsList(container) {
+    renderRecordsList(container: HTMLElement) {
         this.recordsContainer = container.createDiv('accounting-records');
         this.updateRecordsDisplay();
     }
@@ -3087,7 +3007,7 @@ class AccountingView extends ItemView {
         
         // 更新显示
         this.timeDisplay.textContent = `本月 (${startStr} 至 ${endStr})`;
-        this.timeDisplay.style.display = 'block';
+        this.timeDisplay.removeClass('hidden');
         
         // 设置本月按钮为激活状态
         setTimeout(() => {
@@ -3116,7 +3036,7 @@ class AccountingView extends ItemView {
                 
                 // 更新时间显示
                 this.timeDisplay.textContent = `自定义 (${startDate} 至 ${endDate})`;
-                this.timeDisplay.style.display = 'block';
+                this.timeDisplay.removeClass('hidden');
                 
                 // 清除所有按钮的激活状态
                 document.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
@@ -3128,8 +3048,8 @@ class AccountingView extends ItemView {
     }
 
     // 获取分类颜色
-    getCategoryColor(category) {
-        const colors = {
+    getCategoryColor(category: string): string {
+        const colors: Record<string, string> = {
             '餐饮': '#dc3545',    // 红色
             '交通': '#007bff',    // 蓝色
             '娱乐': '#6f42c1',    // 紫色
@@ -3144,11 +3064,10 @@ class AccountingView extends ItemView {
             '旅游': '#ffc107',    // 警告黄色
             '运动': '#fd7e14'     // 橙色
         };
-        return colors[category] || '#6c757d'; // 默认灰色
+        return colors[category] ?? '#6c757d'; // 默认灰色
     }
 
     updateStatsDisplay() {
-        if (!this.statsContainer) return;
         
         this.statsContainer.empty();
         
@@ -3210,8 +3129,7 @@ class AccountingView extends ItemView {
                     // 创建彩色标签
                     const categoryLabel = info.createDiv('category-label');
                     const color = this.getCategoryColor(category);
-                    categoryLabel.style.backgroundColor = color;
-                    categoryLabel.style.color = '#ffffff';
+                    categoryLabel.style.setProperty('--cat-color', color);
                     categoryLabel.textContent = category;
                     
                     const amountInfo = info.createDiv('category-amount-info');
@@ -3224,7 +3142,7 @@ class AccountingView extends ItemView {
                         const progressBar = item.createDiv('budget-progress');
                         const progressFill = progressBar.createDiv('budget-progress-fill');
                         const progressPercent = Math.min(budgetInfo.progress * 100, 100);
-                        progressFill.style.width = `${progressPercent}%`;
+                        progressFill.style.setProperty('--progress-width', `${progressPercent}%`);
                         
                         // 根据进度设置颜色
                         if (budgetInfo.progress >= 1) {
@@ -3243,13 +3161,13 @@ class AccountingView extends ItemView {
     }
     
     // 渲染预算告警
-    renderBudgetAlerts(alerts) {
+    renderBudgetAlerts(alerts: BudgetStatus['alerts']) {
         const alertsContainer = this.statsContainer.createDiv('budget-alerts');
         
         alerts.forEach(alert => {
             const alertItem = alertsContainer.createDiv(`budget-alert ${alert.type}`);
             const icon = alert.type === 'exceeded' ? '⚠️' : '⚡';
-            alertItem.innerHTML = `${icon} ${alert.message}`;
+            alertItem.setText(`${icon} ${alert.message}`);
         });
     }
 
@@ -3270,14 +3188,14 @@ class AccountingView extends ItemView {
         const groupedRecords = this.groupRecordsByDate(records);
         
         Object.entries(groupedRecords)
-            .sort(([a], [b]) => new Date(b) - new Date(a))
+            .sort(([a], [b]) => new Date(b).getTime() - new Date(a).getTime())
             .forEach(([date, dayRecords]) => {
                 this.renderDayRecords(recordsList, date, dayRecords);
             });
     }
 
-    groupRecordsByDate(records) {
-        const grouped = {};
+    groupRecordsByDate(records: AccountingRecord[]): Record<string, AccountingRecord[]> {
+        const grouped: Record<string, AccountingRecord[]> = {};
         records.forEach(record => {
             if (!grouped[record.date]) {
                 grouped[record.date] = [];
@@ -3287,27 +3205,7 @@ class AccountingView extends ItemView {
         return grouped;
     }
 
-    // 获取分类颜色
-    getCategoryColor(category) {
-        const colors = {
-            '餐饮': '#dc3545',    // 红色
-            '交通': '#007bff',    // 蓝色
-            '娱乐': '#6f42c1',    // 紫色
-            '购物': '#fd7e14',    // 橙色
-            '医疗': '#20c997',    // 青色
-            '教育': '#198754',    // 绿色
-            '房租': '#6c757d',    // 灰色
-            '其他': '#495057',    // 深灰色
-            '收入': '#28a745',    // 成功绿色
-            '投资': '#17a2b8',    // 信息蓝色
-            '礼物': '#e83e8c',    // 粉色
-            '旅游': '#ffc107',    // 警告黄色
-            '运动': '#fd7e14'     // 橙色
-        };
-        return colors[category] || '#6c757d'; // 默认灰色
-    }
-
-    renderDayRecords(container, date, records) {
+    renderDayRecords(container: HTMLElement, date: string, records: AccountingRecord[]) {
         const dayGroup = container.createDiv('day-group');
         
         const dayHeader = dayGroup.createDiv('day-header');
@@ -3341,19 +3239,24 @@ class AccountingView extends ItemView {
             // 创建彩色分类标签
             const categoryLabel = recordInfo.createDiv('record-category-label');
             const color = this.getCategoryColor(record.category);
-            categoryLabel.style.backgroundColor = color;
-            categoryLabel.style.color = '#ffffff';
+            categoryLabel.style.setProperty('--cat-color', color);
             categoryLabel.textContent = record.category;
             
             // 显示描述，如果是补录则高亮日期
-            let description = record.description;
+            const descDiv = recordInfo.createDiv({ cls: 'record-description' });
             if (record.isBackfill) {
                 const dateRegex = /(\d{4}-\d{2}-\d{2})/;
-                description = description.replace(dateRegex, '<strong>$1</strong>');
+                const parts = record.description.split(dateRegex);
+                for (let i = 0; i < parts.length; i++) {
+                    if (i % 2 === 1 && dateRegex.test(parts[i])) {
+                        descDiv.createEl('strong', { text: parts[i] });
+                    } else if (parts[i]) {
+                        descDiv.appendText(parts[i]);
+                    }
+                }
+            } else {
+                descDiv.setText(record.description);
             }
-            
-            const descDiv = recordInfo.createDiv({ cls: 'record-description' });
-            descDiv.innerHTML = description;
             
             const recordAmount = recordItem.createDiv('record-amount');
             const amountText = record.isIncome ? `+¥${record.amount}` : `-¥${record.amount}`;
@@ -3370,21 +3273,21 @@ class AccountingView extends ItemView {
         });
     }
 
-    showRecordContextMenu(event, record) {
+    showRecordContextMenu(event: MouseEvent, record: AccountingRecord) {
         const menu = new Menu();
         
         menu.addItem(item => {
             item.setTitle('查看原文')
                 .setIcon('file-text')
                 .onClick(() => {
-                    this.openJournalFile(record.date);
+                    void this.openJournalFile(record.date);
                 });
         });
 
         menu.showAtMouseEvent(event);
     }
 
-    async openJournalFile(date) {
+    async openJournalFile(date: string) {
         const fileName = `${date}.md`;
         const filePath = `${this.plugin.config.journalsPath}/${fileName}`;
         
@@ -3397,7 +3300,7 @@ class AccountingView extends ItemView {
         }
     }
 
-    formatDateDisplay(dateStr) {
+    formatDateDisplay(dateStr: string): string {
         const date = new Date(dateStr);
         const today = new Date();
         const yesterday = new Date(today);
@@ -3493,7 +3396,7 @@ class AccountingView extends ItemView {
         ).open();
     }
 
-    async exportToMarkdown() {
+    exportToMarkdown() {
         if (this.filteredRecords.length === 0) {
             new Notice('当前时间范围内没有记账记录');
             return;
@@ -3571,8 +3474,6 @@ export default class AccountingPlugin extends Plugin {
     storage: AccountingStorage;
     
     async onload() {
-        console.log('加载记账管理插件');
-
         // 加载配置
         await this.loadConfig();
         
@@ -3583,28 +3484,28 @@ export default class AccountingPlugin extends Plugin {
         this.registerEvent(
             this.app.vault.on('modify', (file) => {
                 if (file instanceof TFile && this.storage.onFileChange(file)) {
-                    this.refreshData();
+                    void this.refreshData();
                 }
             })
         );
         this.registerEvent(
             this.app.vault.on('create', (file) => {
                 if (file instanceof TFile && this.storage.onFileChange(file)) {
-                    this.refreshData();
+                    void this.refreshData();
                 }
             })
         );
         this.registerEvent(
             this.app.vault.on('delete', (file) => {
                 if (file instanceof TFile && this.storage.onFileChange(file)) {
-                    this.refreshData();
+                    void this.refreshData();
                 }
             })
         );
         this.registerEvent(
             this.app.metadataCache.on('changed', (file) => {
                 if (file instanceof TFile && this.storage.onFileChange(file)) {
-                    this.refreshData();
+                    void this.refreshData();
                 }
             })
         );
@@ -3615,13 +3516,13 @@ export default class AccountingPlugin extends Plugin {
         // 添加功能区图标
         const appName = this.config.appName || '每日记账';
         this.addRibbonIcon('calculator', appName, () => {
-            this.activateView();
+            void this.activateView();
         });
 
         // 快速记账侧边栏图标（根据配置显示）
         if (this.config.enableQuickCopy !== false) {
             this.addRibbonIcon('copy', '快速记账', () => {
-                this.openQuickCopy();
+                void this.openQuickCopy();
             });
         }
 
@@ -3635,7 +3536,7 @@ export default class AccountingPlugin extends Plugin {
         this.addCommand({
             id: 'refresh-accounting',
             name: '刷新记账数据',
-            callback: () => this.refreshData()
+            callback: () => { void this.refreshData(); }
         });
 
         this.addCommand({
@@ -3680,9 +3581,8 @@ export default class AccountingPlugin extends Plugin {
         this.addSettingTab(new AccountingSettingTab(this.app, this));
     }
 
-    async onunload() {
-        console.log('卸载记账管理插件');
-        this.app.workspace.detachLeavesOfType(ACCOUNTING_VIEW);
+    onunload() {
+        // Don't detach leaves - Obsidian handles view lifecycle
     }
 
     async loadConfig() {
@@ -3692,14 +3592,12 @@ export default class AccountingPlugin extends Plugin {
             
             if (await adapter.exists(configPath)) {
                 const configContent = await adapter.read(configPath);
-                this.config = JSON.parse(configContent);
+                this.config = JSON.parse(configContent) as AccountingConfig;
                 // 确保 journalsPath 存在，如果不存在则使用默认值
                 if (!this.config.journalsPath || typeof this.config.journalsPath !== 'string') {
                     this.config.journalsPath = 'journals';
                 }
-                console.log('配置加载成功:', this.config);
             } else {
-                console.log('配置文件不存在，使用默认配置');
                 this.config = this.getDefaultConfig();
             }
         } catch (error) {
@@ -3718,7 +3616,6 @@ export default class AccountingPlugin extends Plugin {
             if (this.storage) {
                 this.storage.clearCache();
             }
-            console.log('配置保存成功');
         } catch (error) {
             console.error('保存配置失败:', error);
             new Notice('保存配置失败');
@@ -3840,7 +3737,6 @@ export default class AccountingPlugin extends Plugin {
         const deleteBill = async () => {
             if (await adapter.exists(billPath)) {
                 await adapter.remove(billPath);
-                console.log(`[bill-import] 已删除账单文件：${billPath}`);
             }
         };
 
@@ -3894,7 +3790,7 @@ export default class AccountingPlugin extends Plugin {
                 const journalFile = this.app.vault.getAbstractFileByPath(journalPath);
                 if (journalFile instanceof TFile) {
                     const leaves = this.app.workspace.getLeavesOfType('markdown');
-                    const existingLeaf = leaves.find((leaf: any) => leaf.view?.file?.path === journalPath);
+                    const existingLeaf = leaves.find((leaf: WorkspaceLeaf) => (leaf.view as { file?: TFile }).file?.path === journalPath);
                     if (existingLeaf) {
                         this.app.workspace.setActiveLeaf(existingLeaf);
                     } else {
@@ -3902,9 +3798,9 @@ export default class AccountingPlugin extends Plugin {
                         await leaf.openFile(journalFile);
                     }
                 }
-            } catch (error: any) {
+            } catch (error: unknown) {
                 console.error('[bill-import] 静默记账写入失败:', error);
-                new Notice('❌ 静默记账写入失败，bill.md 已保留：' + error.message);
+                new Notice('❌ 静默记账写入失败，bill.md 已保留：' + String(error));
             }
             return;
         }
@@ -3945,7 +3841,7 @@ export default class AccountingPlugin extends Plugin {
         // 先确保视图已打开
         const leaves = this.app.workspace.getLeavesOfType(ACCOUNTING_VIEW);
         if (leaves.length > 0 && leaves[0].view instanceof AccountingView) {
-            const view = leaves[0].view as AccountingView;
+            const view = leaves[0].view;
             view.showExportPDFModal();
         } else {
             // 如果视图未打开，先打开视图再导出
@@ -3953,7 +3849,7 @@ export default class AccountingPlugin extends Plugin {
             setTimeout(() => {
                 const leaves = this.app.workspace.getLeavesOfType(ACCOUNTING_VIEW);
                 if (leaves.length > 0 && leaves[0].view instanceof AccountingView) {
-                    const view = leaves[0].view as AccountingView;
+                    const view = leaves[0].view;
                     view.showExportPDFModal();
                 }
             }, 500);
@@ -3964,16 +3860,16 @@ export default class AccountingPlugin extends Plugin {
         // 先确保视图已打开
         const leaves = this.app.workspace.getLeavesOfType(ACCOUNTING_VIEW);
         if (leaves.length > 0 && leaves[0].view instanceof AccountingView) {
-            const view = leaves[0].view as AccountingView;
-            await view.exportToMarkdown();
+            const view = leaves[0].view;
+            view.exportToMarkdown();
         } else {
             // 如果视图未打开，先打开视图再导出
             await this.activateView();
-            setTimeout(async () => {
+            setTimeout(() => {
                 const leaves = this.app.workspace.getLeavesOfType(ACCOUNTING_VIEW);
                 if (leaves.length > 0 && leaves[0].view instanceof AccountingView) {
-                    const view = leaves[0].view as AccountingView;
-                    await view.exportToMarkdown();
+                    const view = leaves[0].view;
+                    void view.exportToMarkdown();
                 }
             }, 500);
         }
@@ -3984,7 +3880,7 @@ export default class AccountingPlugin extends Plugin {
 class AccountingSettingTab extends PluginSettingTab {
     plugin: AccountingPlugin;
 
-    constructor(app: any, plugin: AccountingPlugin) {
+    constructor(app: App, plugin: AccountingPlugin) {
         super(app, plugin);
         this.plugin = plugin;
     }
@@ -3993,13 +3889,13 @@ class AccountingSettingTab extends PluginSettingTab {
         const { containerEl } = this;
         containerEl.empty();
 
-        containerEl.createEl('h2', { text: '记账管理插件设置' });
+        new Setting(containerEl).setName('记账管理插件设置').setHeading();
 
         new Setting(containerEl)
             .setName('日记文件夹路径')
             .setDesc('日记文件存放的文件夹路径（相对 vault 根目录），默认为 journals')
             .addText(text => text
-                .setPlaceholder('journals')
+                .setPlaceholder('Journals')
                 .setValue(this.plugin.config.journalsPath || 'journals')
                 .onChange(async (value) => {
                     const normalizedPath = (value || 'journals').trim().replace(/^\/+/, '').replace(/\/+$/, '');
@@ -4014,6 +3910,7 @@ class AccountingSettingTab extends PluginSettingTab {
 
         new Setting(containerEl)
             .setName('启用快速记账')
+            /* eslint-disable-next-line obsidianmd/ui/sentence-case */
             .setDesc('在侧边栏显示"快速记账"按钮，记账视图中显示"快速复制"按钮，可快速复制最近N天的记账记录到今天')
             .addToggle(toggle => toggle
                 .setValue(this.plugin.config.enableQuickCopy !== false)
@@ -4026,6 +3923,7 @@ class AccountingSettingTab extends PluginSettingTab {
 
         new Setting(containerEl)
             .setName('快速记账天数')
+            /* eslint-disable-next-line obsidianmd/ui/sentence-case */
             .setDesc('快速记账显示最近N天的记录（默认14天）')
             .addText(text => text
                 .setPlaceholder('14')
@@ -4037,12 +3935,13 @@ class AccountingSettingTab extends PluginSettingTab {
                 }));
 
         containerEl.createEl('p', {
+            // eslint-disable-next-line obsidianmd/ui/sentence-case
             text: '💡 提示：修改后会自动保存并刷新数据。日记文件应存放在此文件夹下，格式为 YYYY-MM-DD.md',
             cls: 'setting-item-description'
         });
 
         // ── 账单导入（bill.md）商户分类配置 ──────────────────────────────────
-        containerEl.createEl('h3', { text: '账单导入 - 商户自动分类' });
+        new Setting(containerEl).setName('账单导入 - 商户自动分类').setHeading();
 
         new Setting(containerEl)
             .setName('静默记账')
@@ -4076,8 +3975,7 @@ class AccountingSettingTab extends PluginSettingTab {
                 ta.setPlaceholder('豆磨坊=cy=买豆腐\n麦当劳=cy=麦当劳\n盒马=gw');
                 ta.setValue(merchantLines);
                 ta.inputEl.rows = 8;
-                ta.inputEl.style.width = '100%';
-                ta.inputEl.style.fontFamily = 'monospace';
+                ta.inputEl.addClass('merchant-textarea');
                 ta.onChange(async (value) => {
                     const map: Record<string, { category: string; description?: string }> = {};
                     value.split('\n').forEach(line => {
@@ -4098,7 +3996,7 @@ class AccountingSettingTab extends PluginSettingTab {
 
         // 打赏区
         const donateSection = containerEl.createDiv({ cls: 'accounting-donate-section' });
-        donateSection.createEl('h3', { text: '☕ 请作者喝杯咖啡' });
+        new Setting(donateSection).setName('☕ 请作者喝杯咖啡').setHeading();
         const donateDesc = donateSection.createEl('p', { cls: 'accounting-donate-desc' });
         donateDesc.setText('如果这个插件帮助了你，欢迎请作者喝杯咖啡 ☕');
 

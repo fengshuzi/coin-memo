@@ -291,6 +291,8 @@
     letter-spacing: 0.5px;
     white-space: nowrap;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+    background-color: var(--cat-color);
+    color: #ffffff;
 }
 
 .category-amount-info {
@@ -328,6 +330,7 @@
 
 .budget-progress-fill {
     height: 100%;
+    width: var(--progress-width, 0%);
     transition: width 0.3s ease;
     border-radius: 4px;
 }
@@ -462,6 +465,8 @@
     letter-spacing: 0.3px;
     margin-bottom: 4px;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+    background-color: var(--cat-color);
+    color: #ffffff;
 }
 
 .record-category {
@@ -2323,4 +2328,21 @@
     font-size: 0.78rem;
     color: var(--text-muted);
     margin: 0;
+}
+
+/* PDF export temp container */
+.pdf-temp-container {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    width: 800px;
+    padding: 20px;
+    background: #ffffff;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+
+/* Merchant textarea */
+.merchant-textarea {
+    width: 100%;
+    font-family: monospace;
 }
