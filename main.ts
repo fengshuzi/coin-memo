@@ -74,6 +74,22 @@ interface DateRangeModalOptions {
     onSelect: (start: string, end: string) => void;
 }
 
+interface InternalPlugins {
+    plugins?: Record<string, { enabled: boolean; instance: SearchPluginInstance }>;
+}
+
+interface SearchPluginInstance {
+    searchEngine?: {
+        searchText?: (term: string, options: { path: string }) => Promise<SearchResult[]>;
+        search?: (term: string) => Promise<SearchResult[]>;
+    };
+}
+
+interface SearchResult {
+    file?: TFile;
+    path?: string;
+}
+
 // 辅助函数：格式化本地日期为 YYYY-MM-DD（避免 UTC 时区问题）
 function formatLocalDate(date: Date): string {
     const year = date.getFullYear();
@@ -652,14 +668,10 @@ class AccountingStorage {
         // 尝试使用搜索引擎
         try {
             // 检查是否有搜索插件
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
-            const appAny = this.app as any;
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-            const internalPlugins = appAny.internalPlugins as { plugins?: Record<string, { enabled: boolean; instance: unknown }> } | undefined;
+            const internalPlugins = (this.app as unknown as { internalPlugins?: InternalPlugins }).internalPlugins;
             const searchPlugin = internalPlugins?.plugins?.['global-search'];
-            if (searchPlugin && searchPlugin.enabled && searchPlugin.instance) {
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                const searchInstance = searchPlugin.instance as Record<string, any>;
+            if (searchPlugin && searchPlugin.enabled) {
+                const searchInstance = searchPlugin.instance;
 
                 // 为每个关键词执行搜索
                 for (const keyword of keywords) {
@@ -669,23 +681,18 @@ class AccountingStorage {
                         // 执行搜索
 
                         // 尝试不同的搜索方法
-                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                        let results: any[] | null = null;
+                        let results: SearchResult[] | null = null;
 
                         // 方法1: 使用搜索引擎的 searchText 方法
-                        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-                        if (searchInstance.searchEngine && searchInstance.searchEngine.searchText) {
-                            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+                        if (searchInstance.searchEngine?.searchText) {
                             results = await searchInstance.searchEngine.searchText(searchTerm, {
                                 path: this.config.journalsPath
-                            }) as unknown[];
+                            });
                         }
 
                         // 方法2: 使用搜索引擎的 search 方法
-                        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-                        if (!results && searchInstance.searchEngine && searchInstance.searchEngine.search) {
-                            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-                            results = await searchInstance.searchEngine.search(searchTerm) as unknown[];
+                        if (!results && searchInstance.searchEngine?.search) {
+                            results = await searchInstance.searchEngine.search(searchTerm);
                         }
 
                         // 处理搜索结果
@@ -1120,8 +1127,7 @@ class CategoryConfigModal extends Modal {
         const note = description.createEl('p');
         note.createEl('strong', { text: '注意：' });
         note.appendText(' ');
-        // eslint-disable-next-line obsidianmd/ui/sentence-case
-        note.createEl('code', { text: 'sr' });
+        note.createEl('code', { text: 'Sr' });
         note.appendText(' 关键词表示收入，其他为支出');
 
         // 分类列表
@@ -1778,8 +1784,8 @@ class ExportPDFModal extends Modal {
             // 创建一个临时容器用于渲染 PDF 内容
             const tempContainer = document.createElement('div');
             tempContainer.addClass('pdf-temp-container');
-            // eslint-disable-next-line
-            tempContainer.innerHTML = this.generatePDFHTML();
+            const fragment = document.createRange().createContextualFragment(this.generatePDFHTML());
+            tempContainer.appendChild(fragment);
             document.body.appendChild(tempContainer);
 
             // 等待渲染完成
@@ -2797,8 +2803,7 @@ class AccountingView extends ItemView {
         exportPDFBtn.onclick = () => this.showExportPDFModal();
 
         const exportMDBtn = actions.createEl('button', {
-            // eslint-disable-next-line obsidianmd/ui/sentence-case
-            text: '导出 MD',
+            text: '导出md',
             cls: 'accounting-btn'
         });
         exportMDBtn.onclick = () => this.exportToMarkdown();
@@ -3910,8 +3915,7 @@ class AccountingSettingTab extends PluginSettingTab {
 
         new Setting(containerEl)
             .setName('启用快速记账')
-            /* eslint-disable-next-line obsidianmd/ui/sentence-case */
-            .setDesc('在侧边栏显示"快速记账"按钮，记账视图中显示"快速复制"按钮，可快速复制最近N天的记账记录到今天')
+            .setDesc('在侧边栏显示"快速记账"按钮，记账视图中显示"快速复制"按钮，可快速复制最近n天的记账记录到今天')
             .addToggle(toggle => toggle
                 .setValue(this.plugin.config.enableQuickCopy !== false)
                 .onChange(async (value) => {
@@ -3923,8 +3927,7 @@ class AccountingSettingTab extends PluginSettingTab {
 
         new Setting(containerEl)
             .setName('快速记账天数')
-            /* eslint-disable-next-line obsidianmd/ui/sentence-case */
-            .setDesc('快速记账显示最近N天的记录（默认14天）')
+            .setDesc('快速记账显示最近n天的记录（默认14天）')
             .addText(text => text
                 .setPlaceholder('14')
                 .setValue(String(this.plugin.config.quickCopyDays || 14))
@@ -3935,8 +3938,7 @@ class AccountingSettingTab extends PluginSettingTab {
                 }));
 
         containerEl.createEl('p', {
-            // eslint-disable-next-line obsidianmd/ui/sentence-case
-            text: '💡 提示：修改后会自动保存并刷新数据。日记文件应存放在此文件夹下，格式为 YYYY-MM-DD.md',
+            text: '💡 提示：修改后会自动保存并刷新数据。日记文件应存放在此文件夹下，格式为 yyyy-mm-dd.md',
             cls: 'setting-item-description'
         });
 
