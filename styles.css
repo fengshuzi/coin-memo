@@ -1099,7 +1099,8 @@
 .config-input-group label {
     font-weight: 500;
     color: var(--text-normal);
-    min-width: 100px;
+    min-width: 140px;
+    white-space: nowrap;
 }
 
 .config-text-input {
