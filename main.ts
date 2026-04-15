@@ -1252,9 +1252,9 @@ class CategoryConfigModal extends Modal {
             });
             deleteBtn.onclick = () => this.deleteCategory(keyword);
 
-            // 监听输入变化
-            keywordInput.oninput = () => this.updateCategory(keyword, keywordInput.value, categoryInput.value);
-            categoryInput.oninput = () => this.updateCategory(keyword, keywordInput.value, categoryInput.value);
+            // 监听输入变化（失焦时才更新，避免中间状态产生多余分类）
+            keywordInput.onchange = () => this.updateCategory(keyword, keywordInput.value, categoryInput.value);
+            categoryInput.onchange = () => this.updateCategory(keyword, keywordInput.value, categoryInput.value);
         });
     }
 
