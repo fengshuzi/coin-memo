@@ -1251,10 +1251,6 @@ class CategoryConfigModal extends Modal {
                 cls: 'delete-category-btn'
             });
             deleteBtn.onclick = () => this.deleteCategory(keyword);
-
-            // 监听输入变化（失焦时才更新，避免中间状态产生多余分类）
-            keywordInput.onchange = () => this.updateCategory(keyword, keywordInput.value, categoryInput.value);
-            categoryInput.onchange = () => this.updateCategory(keyword, keywordInput.value, categoryInput.value);
         });
     }
 
@@ -1295,16 +1291,18 @@ class CategoryConfigModal extends Modal {
                 return;
             }
 
-            // 验证分类配置
+            // 验证分类配置：从 DOM 读取当前输入值
             const cleanCategories = {};
-            for (const [keyword, category] of Object.entries(this.categories)) {
-                const cleanKeyword = keyword.trim();
-                const cleanCategory = category.trim();
-                
+            const categoryItems = this.categoryList.querySelectorAll('.category-item');
+            categoryItems.forEach((item) => {
+                const keywordInput = item.querySelector('.category-keyword') as HTMLInputElement;
+                const nameInput = item.querySelector('.category-name') as HTMLInputElement;
+                const cleanKeyword = keywordInput?.value.trim();
+                const cleanCategory = nameInput?.value.trim();
                 if (cleanKeyword && cleanCategory) {
                     cleanCategories[cleanKeyword] = cleanCategory;
                 }
-            }
+            });
 
             if (Object.keys(cleanCategories).length === 0) {
                 new Notice('至少需要一个分类');
