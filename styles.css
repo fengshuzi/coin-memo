@@ -2404,6 +2404,17 @@
     flex-shrink: 0;
 }
 
+.reclassify-auto-label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+
 .reclassify-empty-hint {
     color: var(--text-muted);
     font-style: italic;
@@ -2423,6 +2434,10 @@
     align-items: center;
     margin-top: 8px;
     flex-wrap: wrap;
+}
+
+.reclassify-date-inputs--hidden {
+    display: none;
 }
 
 .reclassify-date-inputs input[type="date"] {
@@ -2516,6 +2531,11 @@
 .reclassify-new-category {
     color: var(--interactive-accent);
     font-weight: 600;
+}
+
+.reclassify-row-deselected {
+    opacity: 0.4;
+    text-decoration: line-through;
 }
 
 .reclassify-done-hint {

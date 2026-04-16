@@ -98,6 +98,7 @@ interface ReclassifyRule {
     keyword: string;       // 备注关键词（必填，大小写不敏感匹配）
     fromCategory: string;  // 源分类关键词，空字符串表示「不限」
     toCategory: string;    // 目标分类关键词（必填）
+    autoApply?: boolean;   // 打开记账页面时自动执行此规则
 }
 
 /** 持久化配置，存入 config.json 的 reclassifyRules 字段 */
@@ -543,11 +544,15 @@ class ReclassifyEngine {
 
                 // 原子读-改-写：读取文件内容
                 let content = await app.vault.read(file);
+                const originalContent = content;
 
                 // 逐条字符串替换（非正则，确保精确匹配）
                 for (const match of fileMatches) {
                     content = content.replace(match.record.rawLine, match.newRawLine);
                 }
+
+                // 内容无变化则跳过写入，避免修改文件时间戳
+                if (content === originalContent) continue;
 
                 // 写回文件
                 await app.vault.modify(file, content);
@@ -3848,6 +3853,44 @@ export default class AccountingPlugin extends Plugin {
         if (leaf.view instanceof AccountingView) {
             await leaf.view.loadAllRecords(true);
         }
+
+        // 执行标记了 autoApply 的重分类规则（静默，不弹窗）
+        await this.runAutoApplyRules();
+    }
+
+    /** 静默执行所有 autoApply=true 的重分类规则，只处理最近 7 天，完成后刷新视图 */
+    async runAutoApplyRules(): Promise<void> {
+        const autoRules = (this.config.reclassifyRules || []).filter(r => r.autoApply && r.keyword && r.toCategory);
+        if (autoRules.length === 0) return;
+
+        try {
+            const allRecords = await this.storage.getAllRecords();
+
+            // 只处理最近 7 天的记录
+            const sevenDaysAgo = new Date();
+            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+            const startDate = formatLocalDate(sevenDaysAgo);
+            const endDate = formatLocalDate(new Date());
+            const recentRecords = this.storage.filterRecordsByDateRange(allRecords, startDate, endDate);
+
+            const result = ReclassifyEngine.dryRun(
+                autoRules,
+                recentRecords,
+                this.config.expenseEmoji,
+                this.config.journalsPath
+            );
+            if (result.totalCount === 0) return;
+
+            await ReclassifyEngine.commit(this.app, result);
+            this.storage.clearCache();
+
+            // 刷新记账视图
+            await this.refreshData();
+
+            new Notice(`自动分类完成：已修改 ${result.totalCount} 条记录`);
+        } catch (error) {
+            console.error('自动分类失败:', error);
+        }
     }
 
     async activateReclassifyView() {
@@ -4219,6 +4262,7 @@ class ReclassifyView extends ItemView {
     // UI 状态
     rules: ReclassifyRule[] = [];
     previewResult: PreviewResult | null = null;
+    selectedMatches: Set<ReclassifyMatch> = new Set();
     isLoading: boolean = false;
     dateFilterEnabled: boolean = false;
     startDate: string = '';
@@ -4306,26 +4350,8 @@ class ReclassifyView extends ItemView {
             void this.saveRules();
         };
 
-        // 源分类下拉框（含「不限」选项，值为空字符串）
-        const fromSelect = row.createEl('select', { cls: 'reclassify-from-select' });
-        const noLimitOpt = fromSelect.createEl('option', { text: '不限', value: '' });
-        noLimitOpt.value = '';
-        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]) => {
-            const opt = fromSelect.createEl('option', {
-                text: `${categoryName} (${keyword})`,
-                value: keyword
-            });
-            if (keyword === rule.fromCategory) {
-                opt.selected = true;
-            }
-        });
-        if (rule.fromCategory === '') {
-            noLimitOpt.selected = true;
-        }
-        fromSelect.onchange = () => {
-            this.rules[index].fromCategory = fromSelect.value;
-            void this.saveRules();
-        };
+        // 源分类下拉框已移除，默认「不限」（fromCategory 固定为空字符串）
+        this.rules[index].fromCategory = '';
 
         // 目标分类下拉框（必填）
         const toSelect = row.createEl('select', { cls: 'reclassify-to-select' });
@@ -4355,6 +4381,16 @@ class ReclassifyView extends ItemView {
             cls: 'accounting-btn reclassify-delete-btn'
         });
         deleteBtn.onclick = () => this.deleteRule(index);
+
+        // 自动分类复选框
+        const autoLabel = row.createEl('label', { cls: 'reclassify-auto-label' });
+        const autoCb = autoLabel.createEl('input', { type: 'checkbox' });
+        autoCb.checked = rule.autoApply === true;
+        autoLabel.appendText(' 自动');
+        autoCb.onchange = () => {
+            this.rules[index].autoApply = autoCb.checked;
+            void this.saveRules();
+        };
     }
 
     // 任务 6.3：添加规则
@@ -4435,8 +4471,7 @@ class ReclassifyView extends ItemView {
         });
 
         // 日期输入区（默认隐藏）
-        const dateInputs = section.createDiv('reclassify-date-inputs');
-        dateInputs.style.display = 'none';
+        const dateInputs = section.createDiv('reclassify-date-inputs reclassify-date-inputs--hidden');
 
         dateInputs.createEl('label', { text: '开始日期：' });
         const startInput = dateInputs.createEl('input', { type: 'date' });
@@ -4449,7 +4484,7 @@ class ReclassifyView extends ItemView {
         // 复选框变化时显示/隐藏日期输入框
         checkbox.onchange = () => {
             this.dateFilterEnabled = checkbox.checked;
-            dateInputs.style.display = checkbox.checked ? 'flex' : 'none';
+            dateInputs.toggleClass('reclassify-date-inputs--hidden', !checkbox.checked);
         };
 
         // 日期变化时更新状态
@@ -4523,7 +4558,7 @@ class ReclassifyView extends ItemView {
         }
     }
 
-    // 任务 7.3：渲染预览结果
+    // 任务 7.3：渲染预览结果（含逐行勾选）
     private renderPreviewResult(): void {
         this.previewEl.empty();
 
@@ -4540,23 +4575,28 @@ class ReclassifyView extends ItemView {
             return;
         }
 
+        // 默认全部勾选
+        this.selectedMatches = new Set(matches);
+
+        // 更新执行按钮状态的辅助函数
+        const updateExecuteBtn = () => {
+            this.executeBtn.disabled = this.selectedMatches.size === 0;
+            summaryText.textContent = `共匹配 ${totalCount} 条记录，涉及 ${fileCount} 个文件，已选 ${this.selectedMatches.size} 条`;
+        };
+
         // 顶部汇总
         const summary = this.previewEl.createDiv('reclassify-summary');
-        summary.createEl('p', {
-            text: `共匹配 ${totalCount} 条记录，涉及 ${fileCount} 个文件`,
+        const summaryText = summary.createEl('p', {
+            text: `共匹配 ${totalCount} 条记录，涉及 ${fileCount} 个文件，已选 ${totalCount} 条`,
             cls: 'reclassify-summary-text'
         });
 
         // 按规则分组展示
-        // 构建规则 → 匹配记录的 Map（用规则索引作为 key）
         const ruleGroups = new Map<number, ReclassifyMatch[]>();
         for (const match of matches) {
-            // 找到该 match 对应的规则索引
             const ruleIndex = this.rules.indexOf(match.rule);
             const key = ruleIndex >= 0 ? ruleIndex : -1;
-            if (!ruleGroups.has(key)) {
-                ruleGroups.set(key, []);
-            }
+            if (!ruleGroups.has(key)) ruleGroups.set(key, []);
             ruleGroups.get(key)!.push(match);
         }
 
@@ -4576,39 +4616,90 @@ class ReclassifyView extends ItemView {
             const table = groupEl.createEl('table', { cls: 'reclassify-preview-table' });
             const thead = table.createEl('thead');
             const headerRow = thead.createEl('tr');
+
+            // 表头全选复选框
+            const thCheck = headerRow.createEl('th');
+            const selectAllCb = thCheck.createEl('input', { type: 'checkbox' });
+            selectAllCb.checked = true;
+            selectAllCb.title = '全选/取消全选本组';
+
             ['日期', '原始分类', '备注', '金额', '修改后分类'].forEach(col => {
                 headerRow.createEl('th', { text: col });
             });
 
             const tbody = table.createEl('tbody');
+            const rowCheckboxes: HTMLInputElement[] = [];
+
             groupMatches.forEach(match => {
                 const tr = tbody.createEl('tr');
                 const origCategory = this.plugin.config.categories[match.record.keyword] || match.record.keyword;
                 const newCategory = this.plugin.config.categories[match.rule.toCategory] || match.rule.toCategory;
+
+                // 行勾选框
+                const tdCheck = tr.createEl('td');
+                const rowCb = tdCheck.createEl('input', { type: 'checkbox' });
+                rowCb.checked = true;
+                rowCheckboxes.push(rowCb);
+
+                rowCb.onchange = () => {
+                    if (rowCb.checked) {
+                        this.selectedMatches.add(match);
+                        tr.removeClass('reclassify-row-deselected');
+                    } else {
+                        this.selectedMatches.delete(match);
+                        tr.addClass('reclassify-row-deselected');
+                    }
+                    // 同步全选框状态
+                    const checkedCount = rowCheckboxes.filter(cb => cb.checked).length;
+                    selectAllCb.checked = checkedCount === rowCheckboxes.length;
+                    selectAllCb.indeterminate = checkedCount > 0 && checkedCount < rowCheckboxes.length;
+                    updateExecuteBtn();
+                };
+
                 tr.createEl('td', { text: match.record.date });
                 tr.createEl('td', { text: origCategory });
                 tr.createEl('td', { text: match.record.description || '-' });
                 tr.createEl('td', { text: `¥${match.record.amount.toFixed(2)}` });
                 tr.createEl('td', { text: newCategory, cls: 'reclassify-new-category' });
             });
+
+            // 全选复选框逻辑
+            selectAllCb.onchange = () => {
+                rowCheckboxes.forEach((cb, i) => {
+                    cb.checked = selectAllCb.checked;
+                    const match = groupMatches[i];
+                    const tr = cb.closest('tr') as HTMLElement;
+                    if (selectAllCb.checked) {
+                        this.selectedMatches.add(match);
+                        tr?.removeClass('reclassify-row-deselected');
+                    } else {
+                        this.selectedMatches.delete(match);
+                        tr?.addClass('reclassify-row-deselected');
+                    }
+                });
+                selectAllCb.indeterminate = false;
+                updateExecuteBtn();
+            };
         });
 
         // 有匹配时启用「执行修改」按钮
         this.executeBtn.disabled = false;
     }
 
-    // 任务 8.3：执行 commit（带确认弹窗）
+    // 任务 8.3：执行 commit（带确认弹窗，只提交勾选的记录）
     private async executeCommit(): Promise<void> {
-        if (!this.previewResult || this.previewResult.totalCount === 0) return;
+        if (!this.previewResult || this.selectedMatches.size === 0) return;
 
-        const { totalCount, fileCount } = this.previewResult;
+        const selectedList = Array.from(this.selectedMatches);
+        const selectedCount = selectedList.length;
+        const selectedFileCount = new Set(selectedList.map(m => m.filePath)).size;
 
         // 使用 Modal 实现确认对话框
         await new Promise<void>((resolve) => {
             const modal = new Modal(this.app);
             modal.titleEl.setText('确认批量修改');
             modal.contentEl.createEl('p', {
-                text: `将修改 ${totalCount} 条记录，涉及 ${fileCount} 个文件，此操作不可撤销，确认继续？`
+                text: `将修改 ${selectedCount} 条记录，涉及 ${selectedFileCount} 个文件，此操作不可撤销，确认继续？`
             });
 
             const btnRow = modal.contentEl.createDiv({ cls: 'modal-button-container' });
@@ -4621,17 +4712,20 @@ class ReclassifyView extends ItemView {
                 modal.close();
 
                 try {
-                    // 执行写入
-                    await ReclassifyEngine.commit(this.app, this.previewResult!);
+                    // 只提交勾选的记录
+                    const partialResult: PreviewResult = {
+                        matches: selectedList,
+                        totalCount: selectedCount,
+                        fileCount: selectedFileCount,
+                    };
+                    await ReclassifyEngine.commit(this.app, partialResult);
 
-                    // 成功通知
-                    new Notice(`批量修改完成：已修改 ${totalCount} 条记录，涉及 ${fileCount} 个文件`);
+                    new Notice(`批量修改完成：已修改 ${selectedCount} 条记录，涉及 ${selectedFileCount} 个文件`);
 
-                    // 清除缓存
                     this.plugin.storage.clearCache();
 
-                    // 清空预览结果，重新渲染预览区
                     this.previewResult = null;
+                    this.selectedMatches = new Set();
                     this.executeBtn.disabled = true;
                     this.previewEl.empty();
                     this.previewEl.createEl('p', {
