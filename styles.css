@@ -120,23 +120,6 @@
     margin-bottom: 12px;
 }
 
-.clear-filter-btn {
-    padding: 8px 16px;
-    background: var(--background-primary);
-    color: var(--text-normal);
-    border: 1px solid var(--background-modifier-border);
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 500;
-    transition: all 0.15s ease;
-}
-
-.clear-filter-btn:hover {
-    background: var(--background-modifier-hover);
-    transform: translateY(-1px);
-}
-
 /* 统计卡片样式 - Notion 风格 */
 .accounting-stats {
     margin-bottom: 32px;
@@ -584,28 +567,18 @@
     .stats-overview {
         grid-template-columns: 1fr;
     }
-    
-    .quick-time-buttons {
-        flex-direction: column;
-        gap: 6px;
-    }
-    
-    .quick-time-btn {
-        width: 100%;
-        text-align: center;
-    }
 }
 
 /* 筛选器样式 */
 .accounting-filters {
     margin-bottom: 20px;
-    padding: 15px;
+    padding: 12px 16px;
     background: var(--background-secondary);
     border-radius: 8px;
 }
 
 .filter-section {
-    margin-bottom: 15px;
+    margin-bottom: 10px;
 }
 
 .filter-section:last-child {
@@ -613,28 +586,33 @@
 }
 
 .filter-label {
-    display: block;
-    margin-bottom: 10px;
+    display: inline-block;
+    margin-bottom: 6px;
     font-weight: 500;
-    color: var(--text-normal);
+    color: var(--text-muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
 }
 
 .quick-time-buttons {
     display: flex;
-    gap: 8px;
+    gap: 6px;
     flex-wrap: wrap;
-    margin-bottom: 10px;
+    margin-bottom: 6px;
 }
 
 .quick-time-btn {
-    padding: 6px 12px;
+    padding: 4px 10px;
     background: var(--background-primary);
     border: 1px solid var(--background-modifier-border);
-    border-radius: 4px;
+    border-radius: 12px;
     cursor: pointer;
     color: var(--text-normal);
     font-size: 12px;
-    transition: all 0.2s;
+    font-weight: 500;
+    transition: all 0.15s;
+    white-space: nowrap;
 }
 
 .quick-time-btn:hover {
@@ -648,28 +626,30 @@
 }
 
 .current-time-display {
-    padding: 8px 12px;
+    display: inline-block;
+    padding: 3px 10px;
     background: var(--background-modifier-success);
     color: var(--text-on-accent);
-    border-radius: 4px;
-    font-size: 12px;
-    margin-bottom: 10px;
+    border-radius: 10px;
+    font-size: 11px;
+    margin-bottom: 6px;
 }
 
 .clear-filter-btn {
-    padding: 6px 12px;
-    background: var(--background-modifier-error);
-    color: var(--text-on-accent);
-    border: none;
-    border-radius: 4px;
+    padding: 4px 10px;
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 12px;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 11px;
+    transition: all 0.15s;
 }
 
 .clear-filter-btn:hover {
-    opacity: 0.8;
+    background: var(--background-modifier-hover);
+    color: var(--text-normal);
 }
-
 .filter-group {
     display: flex;
     align-items: center;
@@ -2545,4 +2525,34 @@
 
 .reclassify-header {
     margin-bottom: 16px;
+}
+
+/* ── 分类筛选按钮 ── */
+.category-filter-buttons {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+}
+
+.category-filter-btn {
+    padding: 5px 12px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 14px;
+    cursor: pointer;
+    color: var(--text-normal);
+    font-size: 12px;
+    font-weight: 500;
+    transition: all 0.15s ease;
+}
+
+.category-filter-btn:hover {
+    background: var(--background-modifier-hover);
+}
+
+.category-filter-btn.active {
+    background: var(--interactive-accent);
+    color: var(--text-on-accent);
+    border-color: var(--interactive-accent);
 }

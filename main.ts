@@ -457,7 +457,10 @@ class ReclassifyEngine {
      * - rule.fromCategory 为空 OR 等于 record.keyword
      */
     static matchRecord(rule: ReclassifyRule, record: AccountingRecord): boolean {
-        const descriptionMatches = record.description.toLowerCase().includes(rule.keyword.toLowerCase());
+        // 支持 | 分隔多个关键词，任意一个命中即匹配（不区分大小写）
+        const keywords = rule.keyword.split('|').map(k => k.trim()).filter(k => k.length > 0);
+        const descLower = record.description.toLowerCase();
+        const descriptionMatches = keywords.some(k => descLower.includes(k.toLowerCase()));
         const categoryMatches = rule.fromCategory === '' || rule.fromCategory === record.keyword;
         return descriptionMatches && categoryMatches;
     }
@@ -491,6 +494,9 @@ class ReclassifyEngine {
             // 按规则列表顺序匹配，取第一条命中规则（先到先得）
             for (const rule of rules) {
                 if (ReclassifyEngine.matchRecord(rule, record)) {
+                    // 原始分类已经是目标分类，跳过
+                    if (record.keyword === rule.toCategory) break;
+
                     const newRawLine = ReclassifyEngine.replaceKeyword(
                         record.rawLine,
                         record.keyword,
@@ -2893,11 +2899,14 @@ class AccountingView extends ItemView {
     plugin: AccountingPlugin;
     currentRecords: AccountingRecord[];
     currentStats: AccountingStats;
-    filteredRecords: AccountingRecord[];
+    filteredRecords: AccountingRecord[];       // 时间筛选后的记录
+    categoryFilteredRecords: AccountingRecord[]; // 时间+分类筛选后的记录（用于展示）
     currentDateRange: { start: string; end: string; label: string };
+    selectedCategory: string;                  // 当前选中的分类关键词，空字符串表示全部
     statsContainer: HTMLElement;
     recordsContainer: HTMLElement;
     timeDisplay: HTMLElement;
+    categoryFilterEl: HTMLElement;             // 分类筛选按钮容器
 
     constructor(leaf: WorkspaceLeaf, plugin: AccountingPlugin) {
         super(leaf);
@@ -2905,7 +2914,9 @@ class AccountingView extends ItemView {
         this.currentRecords = [];
         this.currentStats = null;
         this.filteredRecords = [];
+        this.categoryFilteredRecords = [];
         this.currentDateRange = { start: '', end: '', label: '本月' };
+        this.selectedCategory = '';
     }
 
     getViewType() {
@@ -3031,6 +3042,52 @@ class AccountingView extends ItemView {
             cls: 'clear-filter-btn'
         });
         clearBtn.onclick = () => this.resetToThisMonth();
+
+        // 分类筛选区域
+        const categorySection = filters.createDiv('filter-section');
+        categorySection.createEl('label', { text: '分类筛选:', cls: 'filter-label' });
+        this.categoryFilterEl = categorySection.createDiv('category-filter-buttons');
+        this.renderCategoryFilterButtons();
+    }
+
+    /** 渲染分类筛选按钮（全部 + 各分类） */
+    renderCategoryFilterButtons() {
+        this.categoryFilterEl.empty();
+
+        // 「全部」按钮
+        const allBtn = this.categoryFilterEl.createEl('button', {
+            text: '全部',
+            cls: `category-filter-btn ${this.selectedCategory === '' ? 'active' : ''}`
+        });
+        allBtn.onclick = () => this.applyCategoryFilter('', allBtn);
+
+        // 各分类按钮
+        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]) => {
+            const btn = this.categoryFilterEl.createEl('button', {
+                text: categoryName,
+                cls: `category-filter-btn ${this.selectedCategory === keyword ? 'active' : ''}`
+            });
+            btn.onclick = () => this.applyCategoryFilter(keyword, btn);
+        });
+    }
+
+    /** 应用分类筛选，在当前时间筛选结果上再过滤 */
+    applyCategoryFilter(keyword: string, buttonEl: HTMLElement) {
+        this.selectedCategory = keyword;
+
+        // 更新按钮激活状态
+        this.categoryFilterEl.querySelectorAll('.category-filter-btn').forEach(btn => {
+            btn.classList.remove('active');
+        });
+        buttonEl.classList.add('active');
+
+        // 在时间筛选结果上叠加分类筛选
+        const base = this.filteredRecords.length > 0 ? this.filteredRecords : this.currentRecords;
+        this.categoryFilteredRecords = keyword === ''
+            ? base
+            : base.filter(r => r.keyword === keyword);
+
+        this.updateRecordsDisplay(this.categoryFilteredRecords);
     }
     
     // 应用时间范围筛选
@@ -3094,10 +3151,15 @@ class AccountingView extends ItemView {
         document.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
         buttonEl.classList.add('active');
 
+        // 时间变化时重置分类筛选
+        this.selectedCategory = '';
+        this.categoryFilteredRecords = filteredRecords;
+        if (this.categoryFilterEl) this.renderCategoryFilterButtons();
+
         this.updateStatsDisplay();
         this.updateRecordsDisplay(filteredRecords);
     }
-    
+
     // 重置为本月
     resetToThisMonth() {
         // 清除所有按钮状态
@@ -3200,7 +3262,12 @@ class AccountingView extends ItemView {
                 thisMonthBtn.classList.add('active');
             }
         }, 100);
-        
+
+        // 时间变化时重置分类筛选
+        this.selectedCategory = '';
+        this.categoryFilteredRecords = filteredRecords;
+        if (this.categoryFilterEl) this.renderCategoryFilterButtons();
+
         this.updateStatsDisplay();
         this.updateRecordsDisplay(filteredRecords);
     }
@@ -3224,7 +3291,12 @@ class AccountingView extends ItemView {
                 
                 // 清除所有按钮的激活状态
                 document.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
-                
+
+                // 时间变化时重置分类筛选
+                this.selectedCategory = '';
+                this.categoryFilteredRecords = filteredRecords;
+                if (this.categoryFilterEl) this.renderCategoryFilterButtons();
+
                 this.updateStatsDisplay();
                 this.updateRecordsDisplay(filteredRecords);
             }
