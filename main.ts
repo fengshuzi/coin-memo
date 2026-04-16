@@ -99,6 +99,7 @@ interface ReclassifyRule {
     fromCategory: string;  // 源分类关键词，空字符串表示「不限」
     toCategory: string;    // 目标分类关键词（必填）
     autoApply?: boolean;   // 打开记账页面时自动执行此规则
+    rewriteDescription?: string; // 重写备注（非空时替换原备注）
 }
 
 /** 持久化配置，存入 config.json 的 reclassifyRules 字段 */
@@ -473,10 +474,28 @@ class ReclassifyEngine {
         rawLine: string,
         fromKeyword: string,
         toKeyword: string,
-        expenseEmoji: string
+        expenseEmoji: string,
+        rewriteDescription?: string
     ): string {
+        // 替换分类关键词
         const pattern = new RegExp(escapeRegex(expenseEmoji) + escapeRegex(fromKeyword));
-        return rawLine.replace(pattern, expenseEmoji + toKeyword);
+        let result = rawLine.replace(pattern, expenseEmoji + toKeyword);
+
+        // 如果有重写备注，替换备注部分
+        // rawLine 格式：- #keyword 备注 金额
+        // 找到金额（最后一个数字），把金额前的备注部分替换
+        if (rewriteDescription && rewriteDescription.trim() !== '') {
+            // 匹配：expenseEmoji + toKeyword + 空格 + (备注内容) + 空格 + 金额
+            const descPattern = new RegExp(
+                `(${escapeRegex(expenseEmoji)}${escapeRegex(toKeyword)}\\s+)(.+?)(\\s+[\\d.]+\\s*$)`
+            );
+            const descMatch = result.match(descPattern);
+            if (descMatch) {
+                result = result.replace(descPattern, `$1${rewriteDescription}$3`);
+            }
+        }
+
+        return result;
     }
 
     /**
@@ -494,14 +513,17 @@ class ReclassifyEngine {
             // 按规则列表顺序匹配，取第一条命中规则（先到先得）
             for (const rule of rules) {
                 if (ReclassifyEngine.matchRecord(rule, record)) {
-                    // 原始分类已经是目标分类，跳过
-                    if (record.keyword === rule.toCategory) break;
+                    // 原始分类已经是目标分类，且没有备注重写规则，跳过
+                    if (record.keyword === rule.toCategory && !rule.rewriteDescription) break;
+                    // 原始分类已经是目标分类，有备注重写规则但备注已经一致，跳过
+                    if (record.keyword === rule.toCategory && rule.rewriteDescription && record.description === rule.rewriteDescription) break;
 
                     const newRawLine = ReclassifyEngine.replaceKeyword(
                         record.rawLine,
                         record.keyword,
                         rule.toCategory,
-                        expenseEmoji
+                        expenseEmoji,
+                        rule.rewriteDescription
                     );
                     const filePath = `${journalsPath}/${record.fileDate}.md`;
                     matches.push({ rule, record, newRawLine, filePath });
@@ -1475,18 +1497,23 @@ class CategoryConfigModal extends Modal {
                 return;
             }
 
-            // 验证分类配置：从 DOM 读取当前输入值
-            const cleanCategories = {};
-            const categoryItems = this.categoryList.querySelectorAll('.category-item');
-            categoryItems.forEach((item) => {
-                const keywordInput = item.querySelector('.category-keyword') as HTMLInputElement;
-                const nameInput = item.querySelector('.category-name') as HTMLInputElement;
-                const cleanKeyword = keywordInput?.value.trim();
-                const cleanCategory = nameInput?.value.trim();
-                if (cleanKeyword && cleanCategory) {
-                    cleanCategories[cleanKeyword] = cleanCategory;
-                }
-            });
+            // 验证分类配置：优先从 DOM 读取（分类 tab 已渲染时），否则用内存副本
+            const cleanCategories: Record<string, string> = {};
+            if (this.categoryList) {
+                const categoryItems = this.categoryList.querySelectorAll('.category-item');
+                categoryItems.forEach((item) => {
+                    const keywordInput = item.querySelector('.category-keyword') as HTMLInputElement;
+                    const nameInput = item.querySelector('.category-name') as HTMLInputElement;
+                    const cleanKeyword = keywordInput?.value.trim();
+                    const cleanCategory = nameInput?.value.trim();
+                    if (cleanKeyword && cleanCategory) {
+                        cleanCategories[cleanKeyword] = cleanCategory;
+                    }
+                });
+            } else {
+                // 分类 tab 未渲染，直接用内存副本
+                Object.assign(cleanCategories, this.categories);
+            }
 
             if (Object.keys(cleanCategories).length === 0) {
                 new Notice('至少需要一个分类');
@@ -1495,7 +1522,7 @@ class CategoryConfigModal extends Modal {
 
             // 获取默认分类选择
             const defaultCategorySelect = document.querySelector('.config-select-input') as HTMLSelectElement;
-            const defaultCategory = defaultCategorySelect ? defaultCategorySelect.value : 'cy';
+            const defaultCategory = defaultCategorySelect ? defaultCategorySelect.value : (this.plugin.config.defaultCategory || 'cy');
 
             // 更新配置
             this.plugin.config.appName = cleanAppName;
@@ -3010,9 +3037,9 @@ class AccountingView extends ItemView {
         
         // 时间筛选区域
         const timeSection = filters.createDiv('filter-section');
-        timeSection.createEl('label', { text: '时间筛选:', cls: 'filter-label' });
+        timeSection.createEl('label', { text: '时间筛选', cls: 'filter-label' });
         
-        // 快速时间按钮组
+        // 时间按钮 + 当前范围文字 + 重置，全部在同一 flex 行
         const quickButtons = timeSection.createDiv('quick-time-buttons');
         
         const timeRanges = [
@@ -3031,21 +3058,21 @@ class AccountingView extends ItemView {
             btn.setAttribute('data-range', range.key);
             btn.onclick = () => this.applyTimeRange(range.key, btn);
         });
-        
-        // 当前时间范围显示
-        this.timeDisplay = timeSection.createDiv('current-time-display');
+
+        // 当前时间范围文字（内联，紧跟按钮）
+        this.timeDisplay = quickButtons.createDiv('current-time-display');
         this.timeDisplay.addClass('hidden');
-        
-        // 清除筛选按钮
-        const clearBtn = timeSection.createEl('button', {
-            text: '重置为本月',
+
+        // 重置按钮（文字链接风格，内联）
+        const clearBtn = quickButtons.createEl('button', {
+            text: '重置',
             cls: 'clear-filter-btn'
         });
         clearBtn.onclick = () => this.resetToThisMonth();
 
         // 分类筛选区域
         const categorySection = filters.createDiv('filter-section');
-        categorySection.createEl('label', { text: '分类筛选:', cls: 'filter-label' });
+        categorySection.createEl('label', { text: '分类筛选', cls: 'filter-label' });
         this.categoryFilterEl = categorySection.createDiv('category-filter-buttons');
         this.renderCategoryFilterButtons();
     }
@@ -4463,6 +4490,18 @@ class ReclassifyView extends ItemView {
             this.rules[index].autoApply = autoCb.checked;
             void this.saveRules();
         };
+
+        // 重写备注输入框（可选，非空时替换原备注）
+        const rewriteInput = row.createEl('input', {
+            type: 'text',
+            cls: 'reclassify-rewrite-input',
+            attr: { placeholder: '重写备注（可选）' }
+        });
+        rewriteInput.value = rule.rewriteDescription || '';
+        rewriteInput.oninput = () => {
+            this.rules[index].rewriteDescription = rewriteInput.value;
+            void this.saveRules();
+        };
     }
 
     // 任务 6.3：添加规则
@@ -4695,7 +4734,7 @@ class ReclassifyView extends ItemView {
             selectAllCb.checked = true;
             selectAllCb.title = '全选/取消全选本组';
 
-            ['日期', '原始分类', '备注', '金额', '修改后分类'].forEach(col => {
+            ['日期', '原始分类', '备注', '金额', '修改后分类', '修改后备注'].forEach(col => {
                 headerRow.createEl('th', { text: col });
             });
 
@@ -4733,6 +4772,16 @@ class ReclassifyView extends ItemView {
                 tr.createEl('td', { text: match.record.description || '-' });
                 tr.createEl('td', { text: `¥${match.record.amount.toFixed(2)}` });
                 tr.createEl('td', { text: newCategory, cls: 'reclassify-new-category' });
+                // 修改后备注：有重写规则且与原备注不同时高亮显示
+                const newDesc = match.rule.rewriteDescription?.trim();
+                const descCell = tr.createEl('td');
+                if (newDesc && newDesc !== match.record.description) {
+                    descCell.textContent = newDesc;
+                    descCell.addClass('reclassify-new-category');
+                } else {
+                    descCell.textContent = '-';
+                    descCell.addClass('reclassify-muted');
+                }
             });
 
             // 全选复选框逻辑

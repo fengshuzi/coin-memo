@@ -110,14 +110,9 @@
 }
 
 .current-time-display {
-    padding: 12px 16px;
-    background: linear-gradient(135deg, #f0f9ff, #e0f2fe);
-    color: var(--text-normal);
-    border: 1px solid #bae6fd;
-    border-radius: 6px;
-    font-size: 13px;
-    font-weight: 500;
-    margin-bottom: 12px;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-weight: 400;
 }
 
 /* 统计卡片样式 - Notion 风格 */
@@ -571,14 +566,14 @@
 
 /* 筛选器样式 */
 .accounting-filters {
-    margin-bottom: 20px;
-    padding: 12px 16px;
+    margin-bottom: 16px;
+    padding: 10px 14px;
     background: var(--background-secondary);
     border-radius: 8px;
 }
 
 .filter-section {
-    margin-bottom: 10px;
+    margin-bottom: 8px;
 }
 
 .filter-section:last-child {
@@ -587,7 +582,7 @@
 
 .filter-label {
     display: inline-block;
-    margin-bottom: 6px;
+    margin-bottom: 5px;
     font-weight: 500;
     color: var(--text-muted);
     font-size: 11px;
@@ -595,18 +590,19 @@
     letter-spacing: 0.4px;
 }
 
+/* 时间按钮行：按钮 + 当前范围文字 + 重置，全部横排 */
 .quick-time-buttons {
     display: flex;
-    gap: 6px;
+    gap: 5px;
     flex-wrap: wrap;
-    margin-bottom: 6px;
+    align-items: center;
 }
 
 .quick-time-btn {
-    padding: 4px 10px;
+    padding: 3px 9px;
     background: var(--background-primary);
     border: 1px solid var(--background-modifier-border);
-    border-radius: 12px;
+    border-radius: 10px;
     cursor: pointer;
     color: var(--text-normal);
     font-size: 12px;
@@ -625,25 +621,29 @@
     border-color: var(--interactive-accent);
 }
 
+/* 当前时间范围：内联带色小标签 */
 .current-time-display {
-    display: inline-block;
-    padding: 3px 10px;
-    background: var(--background-modifier-success);
-    color: var(--text-on-accent);
-    border-radius: 10px;
     font-size: 11px;
-    margin-bottom: 6px;
+    color: #0369a1;
+    background: #e0f2fe;
+    border: 1px solid #bae6fd;
+    border-radius: 10px;
+    padding: 2px 8px;
+    white-space: nowrap;
 }
 
+/* 重置按钮：小胶囊，无下划线 */
 .clear-filter-btn {
-    padding: 4px 10px;
+    padding: 2px 8px;
     background: transparent;
     color: var(--text-muted);
     border: 1px solid var(--background-modifier-border);
-    border-radius: 12px;
+    border-radius: 10px;
     cursor: pointer;
     font-size: 11px;
     transition: all 0.15s;
+    white-space: nowrap;
+    text-decoration: none;
 }
 
 .clear-filter-btn:hover {
@@ -2395,6 +2395,17 @@
     cursor: pointer;
 }
 
+.reclassify-rewrite-input {
+    flex: 1;
+    min-width: 100px;
+    padding: 4px 8px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 4px;
+    background: var(--background-primary);
+    color: var(--text-normal);
+    font-size: 12px;
+}
+
 .reclassify-empty-hint {
     color: var(--text-muted);
     font-style: italic;
@@ -2511,6 +2522,10 @@
 .reclassify-new-category {
     color: var(--interactive-accent);
     font-weight: 600;
+}
+
+.reclassify-muted {
+    color: var(--text-muted);
 }
 
 .reclassify-row-deselected {
