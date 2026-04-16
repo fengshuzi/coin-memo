@@ -21,6 +21,7 @@ interface AccountingConfig {
         enableAlerts: boolean;
         alertThreshold: number;
     };
+    reclassifyRules?: ReclassifyConfig; // 批量重分类规则
 }
 
 interface AccountingRecord {
@@ -89,6 +90,42 @@ interface SearchResult {
     file?: TFile;
     path?: string;
 }
+
+// ── 批量重分类类型定义 ─────────────────────────────────────────────────────────
+
+/** 单条重分类规则 */
+interface ReclassifyRule {
+    keyword: string;       // 备注关键词（必填，大小写不敏感匹配）
+    fromCategory: string;  // 源分类关键词，空字符串表示「不限」
+    toCategory: string;    // 目标分类关键词（必填）
+}
+
+/** 持久化配置，存入 config.json 的 reclassifyRules 字段 */
+type ReclassifyConfig = ReclassifyRule[];
+
+/** 单条预览结果 */
+interface ReclassifyMatch {
+    rule: ReclassifyRule;         // 匹配到该记录的规则
+    record: AccountingRecord;     // 原始记录
+    newRawLine: string;           // 替换后的新行文本
+    filePath: string;             // 所在日记文件路径（journalsPath/YYYY-MM-DD.md）
+}
+
+/** 预览结果汇总 */
+interface PreviewResult {
+    matches: ReclassifyMatch[];
+    totalCount: number;
+    fileCount: number;            // 涉及的不同文件数
+}
+
+/** 规则校验错误 */
+interface ValidationError {
+    ruleIndex: number;            // 从 1 开始
+    message: string;
+}
+
+// 视图类型常量
+const RECLASSIFY_VIEW = 'coin-memo-reclassify';
 
 // 辅助函数：格式化本地日期为 YYYY-MM-DD（避免 UTC 时区问题）
 function formatLocalDate(date: Date): string {
@@ -386,6 +423,142 @@ function matchMerchantCategory(config: AccountingConfig, merchant: string): { ke
         keyword: config.defaultCategory || Object.keys(config.categories)[0] || '',
         description: cleanedMerchant,
     };
+}
+
+// ── 批量重分类引擎 ─────────────────────────────────────────────────────────────
+
+/** 转义正则特殊字符 */
+function escapeRegex(str: string): string {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+class ReclassifyEngine {
+    /**
+     * 校验规则列表，返回所有错误（空数组表示通过）
+     */
+    static validateRules(rules: ReclassifyRule[]): ValidationError[] {
+        const errors: ValidationError[] = [];
+        rules.forEach((rule, index) => {
+            const ruleIndex = index + 1;
+            if (!rule.keyword || rule.keyword.trim() === '') {
+                errors.push({ ruleIndex, message: `规则 ${ruleIndex}：备注关键词不能为空` });
+            }
+            if (!rule.toCategory) {
+                errors.push({ ruleIndex, message: `规则 ${ruleIndex}：请选择目标分类` });
+            }
+        });
+        return errors;
+    }
+
+    /**
+     * 判断单条记录是否匹配规则
+     * - record.description 包含 rule.keyword（大小写不敏感）
+     * - rule.fromCategory 为空 OR 等于 record.keyword
+     */
+    static matchRecord(rule: ReclassifyRule, record: AccountingRecord): boolean {
+        const descriptionMatches = record.description.toLowerCase().includes(rule.keyword.toLowerCase());
+        const categoryMatches = rule.fromCategory === '' || rule.fromCategory === record.keyword;
+        return descriptionMatches && categoryMatches;
+    }
+
+    /**
+     * 将 rawLine 中的 {expenseEmoji}{fromKeyword} 替换为 {expenseEmoji}{toKeyword}
+     * 仅替换第一个匹配项
+     */
+    static replaceKeyword(
+        rawLine: string,
+        fromKeyword: string,
+        toKeyword: string,
+        expenseEmoji: string
+    ): string {
+        const pattern = new RegExp(escapeRegex(expenseEmoji) + escapeRegex(fromKeyword));
+        return rawLine.replace(pattern, expenseEmoji + toKeyword);
+    }
+
+    /**
+     * Dry Run：扫描所有记录，返回预览结果
+     */
+    static dryRun(
+        rules: ReclassifyRule[],
+        records: AccountingRecord[],
+        expenseEmoji: string,
+        journalsPath: string
+    ): PreviewResult {
+        const matches: ReclassifyMatch[] = [];
+
+        for (const record of records) {
+            // 按规则列表顺序匹配，取第一条命中规则（先到先得）
+            for (const rule of rules) {
+                if (ReclassifyEngine.matchRecord(rule, record)) {
+                    const newRawLine = ReclassifyEngine.replaceKeyword(
+                        record.rawLine,
+                        record.keyword,
+                        rule.toCategory,
+                        expenseEmoji
+                    );
+                    const filePath = `${journalsPath}/${record.fileDate}.md`;
+                    matches.push({ rule, record, newRawLine, filePath });
+                    break; // 先到先得，只取第一条匹配规则
+                }
+            }
+        }
+
+        const fileCount = new Set(matches.map(m => m.filePath)).size;
+
+        return {
+            matches,
+            totalCount: matches.length,
+            fileCount,
+        };
+    }
+
+    /**
+     * Commit：将预览结果写回文件
+     * 每个文件只读写一次（原子操作）
+     * @returns 写入失败的文件路径列表
+     */
+    static async commit(
+        app: App,
+        previewResult: PreviewResult
+    ): Promise<string[]> {
+        // 按 filePath 对 matches 分组
+        const fileGroups = new Map<string, ReclassifyMatch[]>();
+        for (const match of previewResult.matches) {
+            if (!fileGroups.has(match.filePath)) {
+                fileGroups.set(match.filePath, []);
+            }
+            fileGroups.get(match.filePath)!.push(match);
+        }
+
+        const failedFiles: string[] = [];
+
+        for (const [filePath, fileMatches] of fileGroups) {
+            try {
+                const file = app.vault.getAbstractFileByPath(filePath);
+                if (!(file instanceof TFile)) {
+                    new Notice(`文件 ${filePath} 写入失败，该文件的修改已跳过`);
+                    failedFiles.push(filePath);
+                    continue;
+                }
+
+                // 原子读-改-写：读取文件内容
+                let content = await app.vault.read(file);
+
+                // 逐条字符串替换（非正则，确保精确匹配）
+                for (const match of fileMatches) {
+                    content = content.replace(match.record.rawLine, match.newRawLine);
+                }
+
+                // 写回文件
+                await app.vault.modify(file, content);
+            } catch {
+                new Notice(`文件 ${filePath} 写入失败，该文件的修改已跳过`);
+                failedFiles.push(filePath);
+            }
+        }
+
+        return failedFiles;
+    }
 }
 
 // 记账记录解析器
@@ -2811,6 +2984,9 @@ class AccountingView extends ItemView {
             cls: 'accounting-btn'
         });
         configBtn.onclick = () => this.showConfigModal();
+
+        const reclassifyBtn = actions.createEl('button', { text: '批量重分类', cls: 'accounting-btn' });
+        reclassifyBtn.onclick = () => this.plugin.activateReclassifyView();
     }
 
     renderFilters(container: HTMLElement) {
@@ -3515,6 +3691,7 @@ export default class AccountingPlugin extends Plugin {
 
         // 注册视图
         this.registerView(ACCOUNTING_VIEW, (leaf) => new AccountingView(leaf, this));
+        this.registerView(RECLASSIFY_VIEW, (leaf) => new ReclassifyView(leaf, this));
 
         // 添加功能区图标
         const appName = this.config.appName || '每日记账';
@@ -3578,6 +3755,12 @@ export default class AccountingPlugin extends Plugin {
             name: '导出账单 Markdown',
             icon: 'file-text',
             callback: () => this.exportMarkdown()
+        });
+
+        this.addCommand({
+            id: 'reclassify',
+            name: '批量重分类',
+            callback: () => this.activateReclassifyView()
         });
 
         // 添加设置页面
@@ -3665,6 +3848,25 @@ export default class AccountingPlugin extends Plugin {
         if (leaf.view instanceof AccountingView) {
             await leaf.view.loadAllRecords(true);
         }
+    }
+
+    async activateReclassifyView() {
+        const { workspace } = this.app;
+
+        // 检查是否已有打开的 RECLASSIFY_VIEW
+        const existing = workspace.getLeavesOfType(RECLASSIFY_VIEW)[0];
+        if (existing) {
+            workspace.setActiveLeaf(existing, { focus: true });
+            return;
+        }
+
+        // 在新标签页打开
+        const leaf = workspace.getLeaf(true);
+        await leaf.setViewState({
+            type: RECLASSIFY_VIEW,
+            active: true
+        });
+        workspace.setActiveLeaf(leaf, { focus: true });
     }
 
     async refreshData() {
@@ -4006,5 +4208,477 @@ class AccountingSettingTab extends PluginSettingTab {
         );
         imgWrap.createEl('img', { attr: { src: imgSrc, alt: '微信打赏', width: '160' } });
         imgWrap.createEl('p', { text: '微信扫码', cls: 'accounting-donate-label' });
+    }
+}
+
+// ── 批量重分类视图 ─────────────────────────────────────────────────────────────
+
+class ReclassifyView extends ItemView {
+    plugin: AccountingPlugin;
+
+    // UI 状态
+    rules: ReclassifyRule[] = [];
+    previewResult: PreviewResult | null = null;
+    isLoading: boolean = false;
+    dateFilterEnabled: boolean = false;
+    startDate: string = '';
+    endDate: string = '';
+
+    // DOM 引用
+    ruleListEl: HTMLElement;
+    previewEl: HTMLElement;
+    previewBtn: HTMLButtonElement;
+    executeBtn: HTMLButtonElement;
+
+    constructor(leaf: WorkspaceLeaf, plugin: AccountingPlugin) {
+        super(leaf);
+        this.plugin = plugin;
+    }
+
+    getViewType(): string { return RECLASSIFY_VIEW; }
+    getDisplayText(): string { return '批量重分类'; }
+    getIcon(): string { return 'replace'; }
+
+    // 任务 5.1：从 plugin.config.reclassifyRules 读取规则，若不存在则初始化为 []
+    loadRules(): void {
+        this.rules = this.plugin.config.reclassifyRules
+            ? [...this.plugin.config.reclassifyRules]
+            : [];
+    }
+
+    // 任务 5.2：读取 config.json，仅更新 reclassifyRules 字段，保留其他字段，写回文件
+    async saveRules(): Promise<void> {
+        try {
+            const configPath = `${this.plugin.manifest.dir}/config.json`;
+            const adapter = this.app.vault.adapter;
+
+            // 读取现有 config.json 内容
+            let existingConfig: Record<string, unknown> = {};
+            if (await adapter.exists(configPath)) {
+                const raw = await adapter.read(configPath);
+                existingConfig = JSON.parse(raw) as Record<string, unknown>;
+            }
+
+            // 仅更新 reclassifyRules 字段，保留其他字段
+            existingConfig.reclassifyRules = this.rules;
+
+            // 写回文件
+            await adapter.write(configPath, JSON.stringify(existingConfig, null, 4));
+
+            // 同步更新内存中的 plugin.config
+            this.plugin.config.reclassifyRules = [...this.rules];
+        } catch (error) {
+            console.error('保存规则失败:', error);
+            new Notice('保存规则失败');
+        }
+    }
+
+    // 任务 6.1：渲染规则列表容器 ruleListEl 和「添加规则」按钮
+    private renderRuleEditor(container: HTMLElement): void {
+        const section = container.createDiv('reclassify-rule-editor');
+        section.createEl('h3', { text: '重分类规则' });
+
+        // 「添加规则」按钮
+        const addBtn = section.createEl('button', {
+            text: '+ 添加规则',
+            cls: 'accounting-btn accounting-btn-primary'
+        });
+        addBtn.onclick = () => this.addRule();
+
+        // 规则列表容器
+        this.ruleListEl = section.createDiv('reclassify-rule-list');
+        this.updateRuleList();
+    }
+
+    // 任务 6.2：渲染单条规则行
+    private renderRuleRow(container: HTMLElement, index: number, rule: ReclassifyRule): void {
+        const row = container.createDiv('reclassify-rule-row');
+
+        // 备注关键词文本输入框
+        const keywordInput = row.createEl('input', {
+            type: 'text',
+            cls: 'reclassify-keyword-input',
+            attr: { placeholder: '如 maner' }
+        });
+        keywordInput.value = rule.keyword;
+        keywordInput.oninput = () => {
+            this.rules[index].keyword = keywordInput.value;
+            void this.saveRules();
+        };
+
+        // 源分类下拉框（含「不限」选项，值为空字符串）
+        const fromSelect = row.createEl('select', { cls: 'reclassify-from-select' });
+        const noLimitOpt = fromSelect.createEl('option', { text: '不限', value: '' });
+        noLimitOpt.value = '';
+        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]) => {
+            const opt = fromSelect.createEl('option', {
+                text: `${categoryName} (${keyword})`,
+                value: keyword
+            });
+            if (keyword === rule.fromCategory) {
+                opt.selected = true;
+            }
+        });
+        if (rule.fromCategory === '') {
+            noLimitOpt.selected = true;
+        }
+        fromSelect.onchange = () => {
+            this.rules[index].fromCategory = fromSelect.value;
+            void this.saveRules();
+        };
+
+        // 目标分类下拉框（必填）
+        const toSelect = row.createEl('select', { cls: 'reclassify-to-select' });
+        // 添加空占位选项
+        const placeholderOpt = toSelect.createEl('option', { text: '请选择目标分类', value: '' });
+        placeholderOpt.disabled = true;
+        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]) => {
+            const opt = toSelect.createEl('option', {
+                text: `${categoryName} (${keyword})`,
+                value: keyword
+            });
+            if (keyword === rule.toCategory) {
+                opt.selected = true;
+            }
+        });
+        if (!rule.toCategory) {
+            placeholderOpt.selected = true;
+        }
+        toSelect.onchange = () => {
+            this.rules[index].toCategory = toSelect.value;
+            void this.saveRules();
+        };
+
+        // 删除按钮
+        const deleteBtn = row.createEl('button', {
+            text: '删除',
+            cls: 'accounting-btn reclassify-delete-btn'
+        });
+        deleteBtn.onclick = () => this.deleteRule(index);
+    }
+
+    // 任务 6.3：添加规则
+    private addRule(): void {
+        this.rules.push({ keyword: '', fromCategory: '', toCategory: '' });
+        this.updateRuleList();
+        void this.saveRules();
+    }
+
+    // 任务 6.3：删除规则
+    private deleteRule(index: number): void {
+        this.rules.splice(index, 1);
+        this.updateRuleList();
+        void this.saveRules();
+    }
+
+    // 任务 6.3：重新渲染规则列表
+    private updateRuleList(): void {
+        if (!this.ruleListEl) return;
+        this.ruleListEl.empty();
+
+        if (this.rules.length === 0) {
+            this.ruleListEl.createEl('p', {
+                text: '点击「添加规则」开始配置',
+                cls: 'reclassify-empty-hint'
+            });
+            return;
+        }
+
+        this.rules.forEach((rule, index) => {
+            this.renderRuleRow(this.ruleListEl, index, rule);
+        });
+    }
+
+    // 任务 7.1：渲染预览区容器和按钮
+    private renderPreviewPanel(container: HTMLElement): void {
+        const section = container.createDiv('reclassify-preview-panel');
+        section.createEl('h3', { text: '预览结果' });
+
+        // 按钮行
+        const btnRow = section.createDiv('reclassify-btn-row');
+
+        this.previewBtn = btnRow.createEl('button', {
+            text: '预览',
+            cls: 'accounting-btn accounting-btn-primary'
+        });
+        this.previewBtn.onclick = () => { void this.runPreview(); };
+
+        this.executeBtn = btnRow.createEl('button', {
+            text: '执行修改',
+            cls: 'accounting-btn reclassify-execute-btn'
+        });
+        this.executeBtn.disabled = true;
+        this.executeBtn.onclick = () => { void this.executeCommit(); };
+
+        // 预览内容区
+        this.previewEl = section.createDiv('reclassify-preview-content');
+    }
+
+    // 任务 10.3：校验日期范围
+    private validateDateRange(startDate: string, endDate: string): string | null {
+        if (!startDate || !endDate) return '请选择完整的日期范围';
+        if (startDate > endDate) return '开始日期不能晚于结束日期';
+        return null;
+    }
+
+    // 任务 10.1：渲染日期范围筛选区
+    private renderDateFilter(container: HTMLElement): void {
+        const section = container.createDiv('reclassify-date-filter');
+
+        // 复选框行
+        const checkboxRow = section.createDiv();
+        const checkbox = checkboxRow.createEl('input', { type: 'checkbox' });
+        checkbox.id = 'reclassify-date-filter-checkbox';
+        checkboxRow.createEl('label', {
+            text: ' 启用日期范围筛选',
+            attr: { for: 'reclassify-date-filter-checkbox' }
+        });
+
+        // 日期输入区（默认隐藏）
+        const dateInputs = section.createDiv('reclassify-date-inputs');
+        dateInputs.style.display = 'none';
+
+        dateInputs.createEl('label', { text: '开始日期：' });
+        const startInput = dateInputs.createEl('input', { type: 'date' });
+        startInput.value = this.startDate;
+
+        dateInputs.createEl('label', { text: '结束日期：' });
+        const endInput = dateInputs.createEl('input', { type: 'date' });
+        endInput.value = this.endDate;
+
+        // 复选框变化时显示/隐藏日期输入框
+        checkbox.onchange = () => {
+            this.dateFilterEnabled = checkbox.checked;
+            dateInputs.style.display = checkbox.checked ? 'flex' : 'none';
+        };
+
+        // 日期变化时更新状态
+        startInput.onchange = () => {
+            this.startDate = startInput.value;
+        };
+        endInput.onchange = () => {
+            this.endDate = endInput.value;
+        };
+    }
+
+    // 任务 7.2：执行预览
+    private async runPreview(): Promise<void> {
+        // 校验规则
+        const errors = ReclassifyEngine.validateRules(this.rules);
+        if (errors.length > 0) {
+            this.previewEl.empty();
+            const errContainer = this.previewEl.createDiv('reclassify-errors');
+            errors.forEach(err => {
+                errContainer.createEl('p', {
+                    text: err.message,
+                    cls: 'reclassify-error-msg'
+                });
+            });
+            return;
+        }
+
+        // 设置加载状态
+        this.isLoading = true;
+        this.previewBtn.disabled = true;
+        this.executeBtn.disabled = true;
+        this.previewEl.empty();
+        this.previewEl.createEl('p', { text: '正在扫描记录...', cls: 'reclassify-loading' });
+
+        try {
+            // 获取所有记录
+            let records = await this.plugin.storage.getAllRecords();
+
+            // 日期范围过滤（如果启用）
+            if (this.dateFilterEnabled && this.startDate && this.endDate) {
+                // 任务 10.2：先校验日期范围
+                const dateError = this.validateDateRange(this.startDate, this.endDate);
+                if (dateError) {
+                    this.previewEl.empty();
+                    this.previewEl.createEl('p', {
+                        text: dateError,
+                        cls: 'reclassify-error-msg'
+                    });
+                    return;
+                }
+                records = this.plugin.storage.filterRecordsByDateRange(records, this.startDate, this.endDate);
+            }
+
+            // 执行 dry run
+            this.previewResult = ReclassifyEngine.dryRun(
+                this.rules,
+                records,
+                this.plugin.config.expenseEmoji,
+                this.plugin.config.journalsPath
+            );
+
+            // 渲染预览结果
+            this.renderPreviewResult();
+        } catch (error) {
+            console.error('预览失败:', error);
+            this.previewEl.empty();
+            this.previewEl.createEl('p', { text: '预览失败，请重试', cls: 'reclassify-error-msg' });
+        } finally {
+            this.isLoading = false;
+            this.previewBtn.disabled = false;
+        }
+    }
+
+    // 任务 7.3：渲染预览结果
+    private renderPreviewResult(): void {
+        this.previewEl.empty();
+
+        if (!this.previewResult) return;
+
+        const { matches, totalCount, fileCount } = this.previewResult;
+
+        if (totalCount === 0) {
+            this.previewEl.createEl('p', {
+                text: '未找到匹配记录，请检查规则配置',
+                cls: 'reclassify-no-match'
+            });
+            this.executeBtn.disabled = true;
+            return;
+        }
+
+        // 顶部汇总
+        const summary = this.previewEl.createDiv('reclassify-summary');
+        summary.createEl('p', {
+            text: `共匹配 ${totalCount} 条记录，涉及 ${fileCount} 个文件`,
+            cls: 'reclassify-summary-text'
+        });
+
+        // 按规则分组展示
+        // 构建规则 → 匹配记录的 Map（用规则索引作为 key）
+        const ruleGroups = new Map<number, ReclassifyMatch[]>();
+        for (const match of matches) {
+            // 找到该 match 对应的规则索引
+            const ruleIndex = this.rules.indexOf(match.rule);
+            const key = ruleIndex >= 0 ? ruleIndex : -1;
+            if (!ruleGroups.has(key)) {
+                ruleGroups.set(key, []);
+            }
+            ruleGroups.get(key)!.push(match);
+        }
+
+        ruleGroups.forEach((groupMatches, ruleIndex) => {
+            const rule = ruleIndex >= 0 ? this.rules[ruleIndex] : groupMatches[0].rule;
+            const fromLabel = rule.fromCategory
+                ? (this.plugin.config.categories[rule.fromCategory] || rule.fromCategory)
+                : '不限';
+            const toLabel = this.plugin.config.categories[rule.toCategory] || rule.toCategory;
+
+            const groupEl = this.previewEl.createDiv('reclassify-group');
+            const groupHeader = groupEl.createDiv('reclassify-group-header');
+            groupHeader.createEl('strong', {
+                text: `规则：关键词「${rule.keyword}」 ${fromLabel} → ${toLabel}（${groupMatches.length} 条）`
+            });
+
+            const table = groupEl.createEl('table', { cls: 'reclassify-preview-table' });
+            const thead = table.createEl('thead');
+            const headerRow = thead.createEl('tr');
+            ['日期', '原始分类', '备注', '金额', '修改后分类'].forEach(col => {
+                headerRow.createEl('th', { text: col });
+            });
+
+            const tbody = table.createEl('tbody');
+            groupMatches.forEach(match => {
+                const tr = tbody.createEl('tr');
+                const origCategory = this.plugin.config.categories[match.record.keyword] || match.record.keyword;
+                const newCategory = this.plugin.config.categories[match.rule.toCategory] || match.rule.toCategory;
+                tr.createEl('td', { text: match.record.date });
+                tr.createEl('td', { text: origCategory });
+                tr.createEl('td', { text: match.record.description || '-' });
+                tr.createEl('td', { text: `¥${match.record.amount.toFixed(2)}` });
+                tr.createEl('td', { text: newCategory, cls: 'reclassify-new-category' });
+            });
+        });
+
+        // 有匹配时启用「执行修改」按钮
+        this.executeBtn.disabled = false;
+    }
+
+    // 任务 8.3：执行 commit（带确认弹窗）
+    private async executeCommit(): Promise<void> {
+        if (!this.previewResult || this.previewResult.totalCount === 0) return;
+
+        const { totalCount, fileCount } = this.previewResult;
+
+        // 使用 Modal 实现确认对话框
+        await new Promise<void>((resolve) => {
+            const modal = new Modal(this.app);
+            modal.titleEl.setText('确认批量修改');
+            modal.contentEl.createEl('p', {
+                text: `将修改 ${totalCount} 条记录，涉及 ${fileCount} 个文件，此操作不可撤销，确认继续？`
+            });
+
+            const btnRow = modal.contentEl.createDiv({ cls: 'modal-button-container' });
+
+            const confirmBtn = btnRow.createEl('button', {
+                text: '确认',
+                cls: 'mod-cta'
+            });
+            confirmBtn.onclick = async () => {
+                modal.close();
+
+                try {
+                    // 执行写入
+                    await ReclassifyEngine.commit(this.app, this.previewResult!);
+
+                    // 成功通知
+                    new Notice(`批量修改完成：已修改 ${totalCount} 条记录，涉及 ${fileCount} 个文件`);
+
+                    // 清除缓存
+                    this.plugin.storage.clearCache();
+
+                    // 清空预览结果，重新渲染预览区
+                    this.previewResult = null;
+                    this.executeBtn.disabled = true;
+                    this.previewEl.empty();
+                    this.previewEl.createEl('p', {
+                        text: '修改完成，可重新点击「预览」查看最新数据',
+                        cls: 'reclassify-done-hint'
+                    });
+                } catch (error) {
+                    console.error('批量修改失败:', error);
+                    new Notice('批量修改失败，请重试');
+                }
+
+                resolve();
+            };
+
+            const cancelBtn = btnRow.createEl('button', { text: '取消' });
+            cancelBtn.onclick = () => {
+                modal.close();
+                resolve();
+            };
+
+            modal.open();
+        });
+    }
+
+    // 渲染页面头部
+    private renderHeader(container: HTMLElement): void {
+        const header = container.createDiv('reclassify-header');
+        const appName = this.plugin.config.appName || '每日记账';
+        header.createEl('h2', {
+            text: `批量重分类 - ${appName}`,
+            cls: 'reclassify-title'
+        });
+    }
+
+    async onOpen(): Promise<void> {
+        const container = this.containerEl.children[1] as HTMLElement;
+        container.empty();
+        container.addClass('reclassify-view');
+
+        this.loadRules();
+        this.renderHeader(container);
+        this.renderRuleEditor(container);
+        this.renderDateFilter(container);
+        this.renderPreviewPanel(container);
+    }
+
+    async onClose(): Promise<void> {
+        // 清理 DOM 引用（Obsidian 会自动清理 containerEl）
     }
 }
