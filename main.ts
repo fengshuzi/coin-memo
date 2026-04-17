@@ -2962,9 +2962,10 @@ class AccountingView extends ItemView {
         await this.render();
     }
 
-    async onClose() {
-        // 清理资源
-    }
+	    onClose(): Promise<void> {
+	        // 清理资源
+	        return Promise.resolve();
+	    }
 
     async render() {
         const container = this.containerEl.children[1];
@@ -4881,19 +4882,21 @@ class ReclassifyView extends ItemView {
         });
     }
 
-    async onOpen(): Promise<void> {
-        const container = this.containerEl.children[1] as HTMLElement;
-        container.empty();
-        container.addClass('reclassify-view');
+	    onOpen(): Promise<void> {
+	        const container = this.containerEl.children[1] as HTMLElement;
+	        container.empty();
+	        container.addClass('reclassify-view');
 
-        this.loadRules();
-        this.renderHeader(container);
-        this.renderRuleEditor(container);
-        this.renderDateFilter(container);
-        this.renderPreviewPanel(container);
-    }
+	        this.loadRules();
+	        this.renderHeader(container);
+	        this.renderRuleEditor(container);
+	        this.renderDateFilter(container);
+	        this.renderPreviewPanel(container);
+	        return Promise.resolve();
+	    }
 
-    async onClose(): Promise<void> {
-        // 清理 DOM 引用（Obsidian 会自动清理 containerEl）
-    }
+	    onClose(): Promise<void> {
+	        // 清理 DOM 引用（Obsidian 会自动清理 containerEl）
+	        return Promise.resolve();
+	    }
 }
