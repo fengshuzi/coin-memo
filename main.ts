@@ -3918,6 +3918,7 @@ export default class AccountingPlugin extends Plugin {
             appName: "每日记账",
             categories: {
                 "cy": "餐饮",
+                "jt": "交通",
                 "gw": "购物",
                 "dk": "贷款",
                 "jf": "生活缴费",
