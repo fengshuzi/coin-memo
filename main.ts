@@ -3525,7 +3525,28 @@ class AccountingView extends ItemView {
             const color = this.getCategoryColor(record.category);
             categoryLabel.style.setProperty('--cat-color', color);
             categoryLabel.textContent = record.category;
-            
+
+            // 点击分类标签轮询切换分类
+            categoryLabel.onclick = async () => {
+                const catKeys = Object.keys(this.plugin.config.categories);
+                const curIdx = catKeys.indexOf(record.keyword);
+                const nextIdx = (curIdx + 1) % catKeys.length;
+                const nextKeyword = catKeys[nextIdx];
+
+                // 更新文件内容
+                const journalPath = `${this.plugin.config.journalsPath}/${record.fileDate}.md`;
+                const file = this.app.vault.getAbstractFileByPath(journalPath);
+                if (file instanceof TFile) {
+                    let content = await this.app.vault.read(file);
+                    const newLine = ReclassifyEngine.replaceKeyword(
+                        record.rawLine, record.keyword, nextKeyword, this.plugin.config.expenseEmoji
+                    );
+                    content = content.replace(record.rawLine, newLine);
+                    await this.app.vault.modify(file, content);
+                    await this.loadAllRecords();
+                }
+            };
+
             // 显示描述，如果是补录则高亮日期
             const descDiv = recordInfo.createDiv({ cls: 'record-description' });
             if (record.isBackfill) {
