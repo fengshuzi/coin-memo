@@ -1993,8 +1993,7 @@ class ExportPDFModal extends Modal {
             // 创建一个临时容器用于渲染 PDF 内容
             const tempContainer = document.createElement('div');
             tempContainer.addClass('pdf-temp-container');
-            const fragment = document.createRange().createContextualFragment(this.generatePDFHTML());
-            tempContainer.appendChild(fragment);
+            tempContainer.innerHTML = this.generatePDFHTML();
             document.body.appendChild(tempContainer);
 
             // 等待渲染完成
