@@ -784,7 +784,7 @@ class AccountingStorage {
     }
 
     // 获取所有记账记录 - 每次都实时加载
-    async getAllRecords(forceRefresh = false): Promise<AccountingRecord[]> {
+    async getAllRecords(_forceRefresh = false): Promise<AccountingRecord[]> {
         let records = [];
         
         try {
@@ -1240,11 +1240,11 @@ class CategoryConfigModal extends Modal {
         this.currentTab = tabKey;
         
         // 更新标签按钮状态
-        document.querySelectorAll('.config-tab').forEach(btn => {
+        this.contentEl.querySelectorAll('.config-tab').forEach(btn => {
             btn.classList.remove('active');
         });
         const tabIndex = tabKey === 'basic' ? 1 : (tabKey === 'categories' ? 2 : 3);
-        document.querySelector(`.config-tab:nth-child(${tabIndex})`).classList.add('active');
+        this.contentEl.querySelector(`.config-tab:nth-child(${tabIndex})`)!.classList.add('active');
         
         this.renderCurrentTab();
     }
@@ -1311,7 +1311,7 @@ class CategoryConfigModal extends Modal {
         previewSection.createEl('h3', { text: '预览效果' });
         
         const previewBox = previewSection.createDiv('config-preview-box');
-        const previewTitle = previewBox.createEl('div', { 
+        const previewTitle = previewBox.createDiv({
             cls: 'preview-title'
         });
         
@@ -1521,7 +1521,7 @@ class CategoryConfigModal extends Modal {
             }
 
             // 获取默认分类选择
-            const defaultCategorySelect = document.querySelector('.config-select-input') as HTMLSelectElement;
+            const defaultCategorySelect = this.contentEl.querySelector('.config-select-input') as HTMLSelectElement;
             const defaultCategory = defaultCategorySelect ? defaultCategorySelect.value : (this.plugin.config.defaultCategory || 'cy');
 
             // 更新配置
@@ -1549,7 +1549,7 @@ class CategoryConfigModal extends Modal {
             }
             
             // 等待一小段时间后重新打开
-            setTimeout(() => {
+            activeWindow.setTimeout(() => {
                 void this.plugin.activateView();
             }, 100);
         } catch (error) {
@@ -1991,17 +1991,18 @@ class ExportPDFModal extends Modal {
             }
 
             // 创建一个临时容器用于渲染 PDF 内容
-            const tempContainer = document.createElement('div');
+            const ownerDoc = this.contentEl.ownerDocument;
+            const tempContainer = ownerDoc.createElement('div');
             tempContainer.addClass('pdf-temp-container');
             const parser = new DOMParser();
-            const doc = parser.parseFromString(this.generatePDFHTML(), 'text/html');
-            const fragment = document.createDocumentFragment();
-            doc.body.childNodes.forEach(node => fragment.appendChild(node.cloneNode(true)));
+            const parsedDoc = parser.parseFromString(this.generatePDFHTML(), 'text/html');
+            const fragment = ownerDoc.createDocumentFragment();
+            parsedDoc.body.childNodes.forEach(node => fragment.appendChild(node.cloneNode(true)));
             tempContainer.appendChild(fragment);
-            document.body.appendChild(tempContainer);
+            ownerDoc.body.appendChild(tempContainer);
 
             // 等待渲染完成
-            await new Promise(resolve => setTimeout(resolve, 100));
+            await new Promise(resolve => activeWindow.setTimeout(resolve, 100));
 
             // 使用 html2canvas 将 HTML 转换为 canvas
             const canvas = await html2canvas(tempContainer, {
@@ -2012,7 +2013,7 @@ class ExportPDFModal extends Modal {
             });
 
             // 清理临时容器
-            document.body.removeChild(tempContainer);
+            ownerDoc.body.removeChild(tempContainer);
 
             // 创建 PDF
             const imgWidth = 210; // A4 宽度 (mm)
@@ -2227,7 +2228,7 @@ class QuickEntryModal extends Modal {
             ? '（格式：50 午餐，回车保存）'
             : '（格式：金额 备注，如：50 午餐）';
         
-        label.createEl('span', { 
+        label.createSpan({
             text: hintText,
             cls: 'entry-hint'
         });
@@ -2265,14 +2266,14 @@ class QuickEntryModal extends Modal {
         });
         
         // 延迟聚焦，避免立即弹出输入法
-        setTimeout(() => {
+        activeWindow.setTimeout(() => {
             this.amountInput.focus();
         }, 100);
     }
 
     selectCategory(keyword: string, buttonEl: HTMLElement) {
         // 清除其他按钮的选中状态
-        document.querySelectorAll('.category-btn').forEach(btn => {
+        this.contentEl.querySelectorAll('.category-btn').forEach(btn => {
             btn.classList.remove('selected');
         });
         
@@ -2418,7 +2419,7 @@ class QuickCopyModal extends Modal {
 
         // 底部提示
         const footer = contentEl.createDiv('quick-copy-footer');
-        footer.createEl('span', { text: `共 ${this.records.length} 条记录`, cls: 'quick-copy-count' });
+        footer.createSpan({ text: `共 ${this.records.length} 条记录`, cls: 'quick-copy-count' });
     }
 
     filterRecords() {
@@ -2453,16 +2454,16 @@ class QuickCopyModal extends Modal {
             // 记录信息
             const recordInfo = recordItem.createDiv('quick-copy-info');
             const categoryColor = this.getCategoryColor(record.category);
-            recordInfo.createEl('span', {
+            recordInfo.createSpan({
                 text: record.category,
                 cls: 'quick-copy-category',
                 attr: { style: `background-color: ${categoryColor}20; color: ${categoryColor}` }
             });
-            recordInfo.createEl('span', {
+            recordInfo.createSpan({
                 text: `¥${record.amount}`,
                 cls: 'quick-copy-amount'
             });
-            recordInfo.createEl('span', {
+            recordInfo.createSpan({
                 text: record.description || '-',
                 cls: 'quick-copy-desc'
             });
@@ -2614,7 +2615,7 @@ class EditCopyModal extends Modal {
         // 分类显示
         const categorySection = contentEl.createDiv('edit-copy-section');
         categorySection.createEl('label', { text: '分类', cls: 'edit-copy-label' });
-        categorySection.createEl('span', {
+        categorySection.createSpan({
             text: this.record.category,
             cls: 'edit-copy-category-display'
         });
@@ -2666,7 +2667,7 @@ class EditCopyModal extends Modal {
             if (e.key === 'Enter') void this.saveAndCopy();
         });
 
-        setTimeout(() => this.descInput.focus(), 100);
+        activeWindow.setTimeout(() => this.descInput.focus(), 100);
     }
 
     async saveAndCopy() {
@@ -2835,7 +2836,7 @@ class BillImportModal extends Modal {
             });
         });
 
-        setTimeout(() => this.descInput.focus(), 100);
+        activeWindow.setTimeout(() => this.descInput.focus(), 100);
     }
 
     async saveAndClose() {
@@ -3179,7 +3180,7 @@ class AccountingView extends ItemView {
         this.timeDisplay.removeClass('hidden');
 
         // 更新按钮状态
-        document.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
+        this.contentEl.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
         buttonEl.classList.add('active');
 
         // 时间变化时重置分类筛选
@@ -3194,10 +3195,10 @@ class AccountingView extends ItemView {
     // 重置为本月
     resetToThisMonth() {
         // 清除所有按钮状态
-        document.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
-        
+        this.contentEl.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
+
         // 应用本月筛选
-        const thisMonthBtn = document.querySelector('.quick-time-btn[data-range="thisMonth"]');
+        const thisMonthBtn = this.contentEl.querySelector('.quick-time-btn[data-range="thisMonth"]');
         if (thisMonthBtn) {
             this.applyTimeRange('thisMonth', thisMonthBtn);
         } else {
@@ -3212,8 +3213,8 @@ class AccountingView extends ItemView {
         this.timeDisplay.addClass('hidden');
         
         // 清除按钮状态
-        document.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
-        
+        this.contentEl.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
+
         this.updateStatsDisplay();
         this.updateRecordsDisplay();
     }
@@ -3287,8 +3288,8 @@ class AccountingView extends ItemView {
         this.timeDisplay.removeClass('hidden');
         
         // 设置本月按钮为激活状态
-        setTimeout(() => {
-            const thisMonthBtn = document.querySelector('.quick-time-btn[data-range="thisMonth"]');
+        activeWindow.setTimeout(() => {
+            const thisMonthBtn = this.contentEl.querySelector('.quick-time-btn[data-range="thisMonth"]');
             if (thisMonthBtn) {
                 thisMonthBtn.classList.add('active');
             }
@@ -3321,7 +3322,7 @@ class AccountingView extends ItemView {
                 this.timeDisplay.removeClass('hidden');
                 
                 // 清除所有按钮的激活状态
-                document.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
+                this.contentEl.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
 
                 // 时间变化时重置分类筛选
                 this.selectedCategory = '';
@@ -4090,7 +4091,7 @@ export default class AccountingPlugin extends Plugin {
                 if (content.trim()) break;
             }
             if (i < MAX_RETRIES - 1) {
-                await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+                await new Promise(resolve => activeWindow.setTimeout(resolve, RETRY_DELAY));
             }
         }
 
@@ -4219,7 +4220,7 @@ export default class AccountingPlugin extends Plugin {
         } else {
             // 如果视图未打开，先打开视图再导出
             await this.activateView();
-            setTimeout(() => {
+            activeWindow.setTimeout(() => {
                 const leaves = this.app.workspace.getLeavesOfType(ACCOUNTING_VIEW);
                 if (leaves.length > 0 && leaves[0].view instanceof AccountingView) {
                     const view = leaves[0].view;
@@ -4238,7 +4239,7 @@ export default class AccountingPlugin extends Plugin {
         } else {
             // 如果视图未打开，先打开视图再导出
             await this.activateView();
-            setTimeout(() => {
+            activeWindow.setTimeout(() => {
                 const leaves = this.app.workspace.getLeavesOfType(ACCOUNTING_VIEW);
                 if (leaves.length > 0 && leaves[0].view instanceof AccountingView) {
                     const view = leaves[0].view;
