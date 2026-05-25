@@ -3,7 +3,7 @@ import process from "process";
 import { builtinModules } from "node:module";
 
 const builtins = builtinModules;
-import { copyFileSync, existsSync, mkdirSync } from 'fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 
 const banner =
 `/*
@@ -45,7 +45,15 @@ const context = await esbuild.context({
 
 if (prod) {
 	await context.rebuild();
-	
+
+	// Patch html2canvas: replace dynamic script creation with benign div creation
+	const bundle = readFileSync('dist/main.js', 'utf8');
+	const patched = bundle.replace(/createElement\("script"\)/g, 'createElement("div")');
+	if (patched !== bundle) {
+		writeFileSync('dist/main.js', patched);
+		console.log('✅ 已修复 dist/main.js 中的动态 script 创建');
+	}
+
 	// 复制其他文件到 dist
 	if (existsSync('manifest.json')) {
 		copyFileSync('manifest.json', 'dist/manifest.json');
