@@ -984,19 +984,6 @@
 .budget-item .budget-input {
     width: 150px;
     flex-shrink: 0;
-}round: var(--background-secondary);
-    border-radius: 6px;
-    transition: all 0.15s ease;
-}
-
-.budget-item:hover {
-    background: var(--background-modifier-hover);
-}
-
-.budget-label {
-    font-weight: 500;
-    color: var(--text-normal);
-    font-size: 14px;
 }
 
 /* 按钮组样式 - Notion 风格 */
