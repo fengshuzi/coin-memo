@@ -47,6 +47,7 @@ try {
   const stylesPath = existsSync('dist/styles.css') ? 'dist/styles.css' : 'styles.css';
   const files = [mainJsPath, manifestPath];
   if (existsSync(stylesPath)) files.push(stylesPath);
+  if (existsSync('dist/assets/wechat-donate.jpg')) files.push('dist/assets/wechat-donate.jpg');
   
   console.log(`📦 将上传文件: ${files.join(', ')}\n`);
 
