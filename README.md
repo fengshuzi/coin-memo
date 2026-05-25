@@ -1,140 +1,140 @@
-# Obsidian 记账管理插件
+# Coin Memo — Obsidian Expense Tracker
 
-基于 Obsidian 日记文件的智能记账管理插件，能够自动识别和统计日记中的记账记录，支持截图账单一键导入。
+A daily expense tracking plugin for Obsidian that automatically recognizes and tallies accounting records from your daily notes. Supports one-tap bill import via screenshot OCR.
 
-![插件主界面](./assets/image-20260318142927017.png)
+![Main view](./assets/image-20260318142927017.png)
 
-## 功能特点
+## Features
 
-| 功能 | 说明 |
-|------|------|
-| 🔍 自动识别 | 从日记文件中自动解析记账记录 |
-| 📊 统计分析 | 收支统计、分类统计、时间范围查询 |
-| 🏷️ 分类管理 | 自定义关键词与分类映射 |
-| 📅 时间筛选 | 按日期范围查看记账记录 |
-| 💰 收支管理 | 区分收入和支出，计算结余 |
-| 📋 快速记账 | 一键复制历史记录到今天 |
-| 🧾 截图账单导入 | OCR 文字写入 bill.md，自动解析记账 |
-| 📄 导出功能 | 支持导出 PDF 和 Markdown |
-| 🔄 批量重分类 | 按备注关键词批量修正记账分类，支持自动执行 |
+| Feature | Description |
+|---------|-------------|
+| 🔍 Auto-detection | Parses expense records from daily notes automatically |
+| 📊 Statistics | Income/expense summaries, category breakdowns, date-range queries |
+| 🏷️ Category management | Custom keyword-to-category mapping |
+| 📅 Date filter | View records by date range |
+| 💰 Income & expenses | Track income and spending separately, calculate balance |
+| 📋 Quick copy | Copy a past record to today with one tap |
+| 🧾 Bill screenshot import | OCR text written to bill.md, auto-parsed into records |
+| 📄 Export | Export to PDF or Markdown |
+| 🔄 Batch reclassify | Bulk-correct categories by note keyword, with auto-run support |
 
-## 安装方法
+## Installation
 
-### 方式一：从 GitHub Release 安装（推荐）
+### Option 1: From GitHub Release (recommended)
 
-1. 前往 [Releases](../../releases) 页面下载最新版本
-2. 下载以下文件：`main.js`、`manifest.json`、`styles.css`、`config.json`
-3. 在 Obsidian 库中创建插件目录：`.obsidian/plugins/obsidian-accounting/`
-4. 将下载的文件复制到该目录
-5. 重启 Obsidian，在设置中启用「记账管理」插件
+1. Go to the [Releases](../../releases) page and download the latest version.
+2. Download `main.js`, `manifest.json`, `styles.css`, and `config.json`.
+3. Create the plugin folder in your vault: `.obsidian/plugins/coin-memo/`.
+4. Copy the downloaded files into that folder.
+5. Restart Obsidian and enable **Coin Memo** in Settings → Community plugins.
 
-### 方式二：手动安装
+### Option 2: Build from source
 
 ```bash
 cd /path/to/your/vault/.obsidian/plugins
-git clone https://github.com/你的用户名/obsidian-accounting.git
-cd obsidian-accounting
+git clone https://github.com/fengshuzi/coin-memo.git
+cd coin-memo
 npm install && npm run build
 ```
 
-## 快速开始
+## Quick Start
 
-### 第一步：配置日记文件夹
+### Step 1: Configure the journal folder
 
-打开设置 → **第三方插件** → **记账管理插件**，在「日记文件夹路径」填写日记文件夹（默认 `journals`）。
+Open Settings → **Community plugins** → **Coin Memo**, and set the journal folder path (default: `journals`).
 
-![设置页](./assets/image-20260318143023006.png)
+![Settings](./assets/image-20260318143023006.png)
 
-### 第二步：在日记中记账
+### Step 2: Add records in your daily note
 
-在 `journals/2024-01-10.md` 中写入：
+In `journals/2024-01-10.md`:
 
 ```markdown
-- #cy 买豆腐 15.5
-- #cy 麻辣烫 45
-- #gw 超市购物 128
-- #sr 工资 8500
+- #cy Tofu 15.5
+- #cy Spicy hotpot 45
+- #gw Supermarket 128
+- #sr Salary 8500
 ```
 
-### 第三步：查看统计
+### Step 3: View statistics
 
-点击左侧工具栏计算器图标打开记账视图。
+Click the calculator icon in the left sidebar to open the expense tracker view.
 
-## 记账格式
+## Record Format
 
-### 基本格式
-
-```
-#关键词 描述 金额
-```
-
-### 格式规则
-
-- ✅ 描述在前、金额在后（推荐）
-- ✅ 金额也可以在前
-- ✅ 支持货币符号（¥、元、块），自动忽略
-- ✅ 一行多个数字时，**第一个数字**识别为金额
-
-### 默认关键词
-
-| 关键词 | 分类 | 说明 |
-|--------|------|------|
-| `cy` | 餐饮 | 日常饮食 |
-| `gw` | 购物 | 网购、实体店 |
-| `dk` | 贷款 | 房贷、车贷 |
-| `jf` | 生活缴费 | 水电气网 |
-| `qt` | 其他 | 未分类支出 |
-| `sr` | 收入 ⭐ | **特殊关键词**，标识收入 |
-
-## 快速记账
-
-快速记账帮你一键复制历史记录到今天，适合固定消费项目。
-
-### 入口
-
-| 入口 | 说明 |
-|------|------|
-| 侧边栏图标 | 点击 📋 图标 |
-| 命令面板 | `Cmd/Ctrl + P` → 「快速记账」 |
-| Advanced URI | `obsidian://advanced-uri?vault=库名&commandid=obsidian-accounting:quick-copy` |
-
-### 使用流程
-
-1. 打开弹窗，显示最近 14 天记录（自动去重）
-2. 搜索或按分类筛选
-3. 点击「复制」直接写入今天，或「编辑」修改后写入
-4. 自动跳转到今天的日记
-
-![快速记账弹窗](./assets/image-20260318141149598.png)
-
-### 手机端：背面轻点触发
-
-1. 安装社区插件 **Obsidian Advanced URI**
-2. 新建快捷指令，打开 URL：`obsidian://advanced-uri?vault=库名&commandid=obsidian-accounting:quick-copy`
-3. **设置 → 辅助功能 → 触控 → 背面轻点**，选择该快捷指令
-
-## 截图账单导入
-
-> 用微信/建行 App 截图 → 快捷指令 OCR 识别 → 写入 bill.md → 执行命令自动记账
-
-### 工作流程
+### Basic syntax
 
 ```
-支付截图
-  ↓ 快捷指令（OCR）
+#keyword description amount
+```
+
+### Format rules
+
+- ✅ Description first, amount last (recommended)
+- ✅ Amount can also come first
+- ✅ Currency symbols (¥, 元, 块) are ignored automatically
+- ✅ When a line contains multiple numbers, the **first number** is used as the amount
+
+### Default keywords
+
+| Keyword | Category | Note |
+|---------|----------|------|
+| `cy` | Dining | Food & drinks |
+| `gw` | Shopping | Online & in-store |
+| `dk` | Loans | Mortgage, auto loans |
+| `jf` | Utilities | Water, electricity, gas, internet |
+| `qt` | Other | Uncategorized expenses |
+| `sr` | Income ⭐ | **Special keyword** — marks income |
+
+## Quick Copy
+
+Quick Copy lets you duplicate a past record to today — handy for recurring expenses.
+
+### How to open
+
+| Method | Instructions |
+|--------|-------------|
+| Sidebar icon | Click the 📋 icon |
+| Command palette | `Cmd/Ctrl + P` → "Quick Copy" |
+| Advanced URI | `obsidian://advanced-uri?vault=VaultName&commandid=coin-memo:quick-copy` |
+
+### Workflow
+
+1. A modal opens showing records from the last 14 days (auto-deduplicated).
+2. Search or filter by category.
+3. Click "Copy" to write the record to today's note as-is, or "Edit" to modify first.
+4. Your today's daily note opens automatically.
+
+![Quick Copy modal](./assets/image-20260318141149598.png)
+
+### iOS: Back Tap shortcut
+
+1. Install the community plugin **Obsidian Advanced URI**.
+2. Create a Shortcuts action that opens: `obsidian://advanced-uri?vault=VaultName&commandid=coin-memo:quick-copy`
+3. Go to **Settings → Accessibility → Touch → Back Tap** and assign the shortcut.
+
+## Bill Screenshot Import
+
+> Screenshot from WeChat / bank app → Shortcuts OCR → write to bill.md → run command to auto-import
+
+### Workflow
+
+```
+Payment screenshot
+  ↓ iOS Shortcuts (OCR)
 journals/bill.md
-  ↓ 命令「从账单导入记账」
-自动解析 → 弹出确认框 → 写入今日日记 → 删除 bill.md
+  ↓ Command "Import from Bill"
+Auto-parse → confirmation dialog → write to today's note → delete bill.md
 ```
 
-### bill.md 格式
+### bill.md format
 
-支持多条记录，用 `###` 分隔，插件只解析**最后一段**：
+Multiple records separated by `###`. The plugin only parses the **last section**:
 
 ```
 20:58
 5G
-豆磨坊（**飞）
+豆磨坊（**飞)
 ·19.40
 完成
 ###
@@ -145,24 +145,24 @@ Manner
 完成
 ```
 
-### 支持的截图类型
+### Supported screenshot types
 
-| 类型 | 识别特征 |
-|------|---------|
-| 💚 微信支付完成页 | 含「支付成功」或「返回商家」 |
-| 💚 微信支付账单页 | 含「我的账单」+「支付服务」 |
-| 💙 支付宝完成页 | 含「完成」+「付款方式」 |
-| 🟡 建设银行动账提醒 | 含「动账提醒」或「变动提醒」|
+| Type | Detection pattern |
+|------|-------------------|
+| 💚 WeChat Pay success page | Contains "支付成功" or "返回商家" |
+| 💚 WeChat Pay bill page | Contains "我的账单" + "支付服务" |
+| 💙 Alipay success page | Contains "完成" + "付款方式" |
+| 🟡 CCB transaction alert | Contains "动账提醒" or "变动提醒" |
 
-### 商户自动分类配置
+### Merchant auto-classification
 
-打开设置 → **账单导入 - 商户自动分类**，每行一条：
+Open Settings → **Bill Import — Merchant Auto-Classification**. One rule per line:
 
 ```
-商户关键字=分类关键词=描述
+merchant_keyword=category_keyword=description
 ```
 
-示例：
+Example:
 
 ```
 豆磨坊=cy=买豆腐
@@ -171,112 +171,110 @@ Manner
 物业=jf=物业费
 ```
 
-- **商户关键字**：OCR 商户名中包含该字即命中（无需完整匹配）
-- **描述**：可省略，省略时弹框描述框留空
+- **Merchant keyword**: matched via substring (no exact match needed).
+- **Description**: optional; if omitted, the description field in the dialog is left blank.
 
-> 💡 先不配置映射执行一次导入，从弹框「商户」行看到 OCR 实际输出的文字，再以该文字作为 key。
+> 💡 Run an import once without configuring mappings first — the dialog shows the actual OCR merchant text, which you can then use as the key.
 
-### 触发命令
+### Triggering the import
 
-| 方式 | 操作 |
-|------|------|
-| 命令面板 | `Cmd/Ctrl + P` → 「从账单导入记账」 |
-| Advanced URI | `obsidian://advanced-uri?vault=库名&commandid=obsidian-accounting:bill-import` |
+| Method | Action |
+|--------|--------|
+| Command palette | `Cmd/Ctrl + P` → "Import from Bill" |
+| Advanced URI | `obsidian://advanced-uri?vault=VaultName&commandid=coin-memo:bill-import` |
 
-![账单导入确认框](./assets/image-20260330113602744.png)
+![Bill import confirmation](./assets/image-20260330113602744.png)
 
-## 命令列表
+## Commands
 
-通过 `Cmd/Ctrl + P` 打开命令面板：
+Open the command palette with `Cmd/Ctrl + P`:
 
-| 命令 | 命令 ID | 说明 |
-|------|---------|------|
-| 打开每日记账 | `open-accounting` | 打开记账视图 |
-| 刷新记账数据 | `refresh-accounting` | 重新扫描日记文件 |
-| 新建记账 | `quick-entry` | 打开新建记账弹窗 |
-| 快速记账 | `quick-copy` | 打开快速记账弹窗 |
-| 从账单导入记账 | `bill-import` | 解析 bill.md 并弹出确认框 |
-| 导出账单 PDF | `export-pdf` | 导出当前视图为 PDF |
-| 导出账单 Markdown | `export-markdown` | 导出当前视图为 MD |
-| 批量重分类 | `reclassify` | 打开批量重分类页面 |
+| Command | Command ID | Description |
+|---------|------------|-------------|
+| Open Daily Accounting | `open-accounting` | Open the expense tracker view |
+| Refresh Accounting Data | `refresh-accounting` | Re-scan daily notes |
+| New Entry | `quick-entry` | Open the new-entry dialog |
+| Quick Copy | `quick-copy` | Open the quick-copy dialog |
+| Import from Bill | `bill-import` | Parse bill.md and show confirmation |
+| Export PDF | `export-pdf` | Export the current view as PDF |
+| Export Markdown | `export-markdown` | Export the current view as Markdown |
+| Batch Reclassify | `reclassify` | Open the batch reclassify page |
 
-> Advanced URI 格式：`obsidian://advanced-uri?vault=库名&commandid=obsidian-accounting:命令ID`
+> Advanced URI format: `obsidian://advanced-uri?vault=VaultName&commandid=coin-memo:<command-id>`
 
-## 批量重分类
+## Batch Reclassify
 
-> 场景：大量记账通过截图 OCR 录入，分类默认为 `#cy`，需要根据备注内容批量修正分类。
+> Use case: many records are imported via screenshot OCR and default to `#cy`. You need to bulk-correct categories based on the description text.
 
-### 功能入口
+### How to open
 
-记账视图操作栏点击「批量重分类」按钮，或命令面板执行 `批量重分类`，在新标签页打开独立页面，不影响现有记账视图布局。
+Click the "Batch Reclassify" button in the tracker view toolbar, or run the command from the palette. It opens in a new tab so it doesn't disrupt the current view.
 
-### 使用流程
+### Workflow
 
-1. **配置规则**：点击「+ 添加规则」，填写备注关键词和目标分类
-2. **预览**：点击「预览」扫描所有日记，按规则分组展示匹配记录
-3. **勾选**：默认全选，可取消不需要修改的条目
-4. **执行**：点击「执行修改」，确认后写入文件
+1. **Add a rule**: Click "+ Add Rule" and fill in the note keyword and target category.
+2. **Preview**: Click "Preview" to scan all daily notes and show matching records grouped by rule.
+3. **Select**: All records are selected by default; uncheck any you don't want to change.
+4. **Execute**: Click "Execute" and confirm — changes are written to the files.
 
-![批量重分类界面](./assets/image-20260416-reclassify.png)
+![Batch Reclassify view](./assets/image-20260416-reclassify.png)
 
-### 规则配置
+### Rule fields
 
-每条规则包含：
+| Field | Description |
+|-------|-------------|
+| Note keyword | If the note contains this keyword (case-insensitive), the rule matches |
+| Target category | The category to change to |
+| Auto | When checked, the rule runs silently each time the tracker view opens (only affects the last 7 days) |
 
-| 字段 | 说明 |
-|------|------|
-| 备注关键词 | 备注中包含该词即命中，**不区分大小写** |
-| 目标分类 | 命中后改为此分类 |
-| 自动 | 勾选后打开记账页面时自动执行（仅处理最近 7 天） |
+Example: note contains `maner` → change category to `悦己奖励 (yj)`
 
-示例：备注包含 `maner` → 分类改为 `悦己奖励 (yj)`
+### Auto-classify
 
-### 自动分类
+When the "Auto" checkbox is enabled, the rule runs silently every time you open the tracker view:
 
-勾选规则的「自动」复选框后，每次打开记账视图时自动静默执行该规则：
+- Only processes records from the **last 7 days**, so historical data is untouched.
+- If the target category is already correct, the file is **not modified** (preserves timestamps).
+- Shows a notification: "Auto-classify complete: X records updated."
 
-- 只处理**最近 7 天**的记录，避免影响历史数据
-- 如果目标分类已经正确，**跳过文件写入**，不修改文件时间戳
-- 执行完成后显示通知「自动分类完成：已修改 X 条记录」
+### Date range filter
 
-### 日期范围筛选
+Enable "Date range filter" to limit manual preview/execution to a specific date range, preventing accidental changes to older records.
 
-勾选「启用日期范围筛选」可将手动预览/执行的范围限定在指定日期区间内，避免误改历史数据。
+## Export
 
-## 导出功能
+### Export PDF
 
-### 导出 PDF
+Click "Export PDF" in the tracker view, choose a date range, and export. The PDF includes a summary, category totals, and detailed records.
 
-在记账视图点击「导出 PDF」，选择时间范围后导出，包含统计概览、分类汇总、详细记录。
+### Export Markdown
 
-### 导出 Markdown
+Click "Export MD" to generate a Markdown-formatted expense report.
 
-点击「导出 MD」，生成 Markdown 格式账单报告。
+## FAQ
 
-## 常见问题
+**Q: No records showing up?**
+Check that your daily notes are in the configured folder, filenames follow `YYYY-MM-DD.md`, and the record format is correct.
 
-**Q: 看不到记账记录？**  
-检查日记文件是否在配置的文件夹下、文件名是否为 `YYYY-MM-DD.md`、记账格式是否正确。
+**Q: How do I add a new category?**
+Click the "Configure Categories" button in the tracker view.
 
-**Q: 如何添加新分类？**  
-点击记账视图中的「配置分类」按钮添加。
+**Q: Where is my data stored?**
+All data lives in your Obsidian notes (daily note files + config.json) — fully local.
 
-**Q: 数据存储在哪里？**  
-所有数据存储在 Obsidian 笔记中（日记文件 + config.json），完全本地。
+**Q: What if bill.md gets deleted accidentally?**
+It is only deleted after you confirm the import or when parsing fails. Check the developer console (`Cmd+Option+I`) for `[bill-import]` logs if needed.
 
-**Q: bill.md 被误删怎么办？**  
-只有点击「记账」按钮确认、或解析失败时才会删除。如有疑问可在 Obsidian 开发者控制台（`Cmd+Option+I`）搜索 `[bill-import]` 查看日志。
+**Q: OCR merchant name doesn't match the actual name?**
+Use the text shown in the import dialog to configure your merchant keyword — OCR may produce slight errors.
 
-**Q: OCR 识别的商户名和实际不符？**  
-以弹框中显示的文字为准配置商户关键字，OCR 可能存在误识别（如腐→磨）。
-
-## 开发
+## Development
 
 ```bash
-npm run dev      # 开发模式
-npm run build    # 构建
-npm run deploy   # 部署到本地 vault
-npm run release  # 发布到 GitHub
+npm run dev      # Watch mode with sourcemaps
+npm run build    # Production build
+npm run deploy   # Deploy to local vaults
+npm run release  # Publish to GitHub
 ```
 
 ## License
@@ -285,15 +283,15 @@ MIT
 
 ---
 
-## ☕ 请作者喝杯咖啡
+## ☕ Support the author
 
-如果这个插件帮助了你，欢迎扫码打赏，感谢支持！
+If this plugin helps you, consider buying me a coffee!
 
 <div align="center">
-  <img src="./assets/wechat-donate.jpg" alt="微信打赏" width="200" />
-  <p><sub>微信扫码打赏</sub></p>
+  <img src="./assets/wechat-donate.jpg" alt="WeChat Donate" width="200" />
+  <p><sub>Scan with WeChat to donate</sub></p>
 </div>
 
 ---
 
-💡 **提示**：记账最难的不是方法，而是坚持。把记账融入日记，让记录消费成为写日记的自然延伸。
+💡 **Tip**: The hardest part of tracking expenses isn't the method — it's consistency. By integrating bookkeeping into your daily notes, recording spending becomes a natural extension of journaling.
