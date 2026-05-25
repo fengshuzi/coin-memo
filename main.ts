@@ -2189,6 +2189,7 @@ class QuickEntryModal extends Modal {
         const { contentEl } = this;
         contentEl.empty();
         contentEl.addClass('quick-entry-modal');
+        this.containerEl.addClass('quick-entry-container');
 
         this.titleEl.setText('快速记账');
 

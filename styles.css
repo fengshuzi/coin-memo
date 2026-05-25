@@ -1176,14 +1176,14 @@
 
 .category-btn.expense-btn.selected {
     background: linear-gradient(135deg, #fef3c7, #fde68a);
-    border: 2px solid #f59e0b !important; /* 使用 !important 确保边框显示 */
+    border: 2px solid #f59e0b;
     color: #92400e;
     font-weight: 600;
 }
 
 .category-btn.income-btn.selected {
     background: linear-gradient(135deg, #dcfce7, #bbf7d0);
-    border: 2px solid #10b981 !important; /* 使用 !important 确保边框显示 */
+    border: 2px solid #10b981;
     color: #065f46;
     font-weight: 600;
 }
@@ -1212,7 +1212,7 @@
 }
 
 .entry-input-combined {
-    font-size: 18px !important;
+    font-size: 18px;
     font-weight: 500;
 }
 
@@ -1259,23 +1259,23 @@
 }
 
 /* 主按钮样式 */
-.accounting-btn-primary {
-    background: linear-gradient(135deg, var(--interactive-accent), #3b82f6) !important;
-    color: var(--text-on-accent) !important;
-    border-color: var(--interactive-accent) !important;
-    font-weight: 600 !important;
+button.accounting-btn-primary {
+    background: linear-gradient(135deg, var(--interactive-accent), #3b82f6);
+    color: var(--text-on-accent);
+    border-color: var(--interactive-accent);
+    font-weight: 600;
 }
 
-.accounting-btn-primary:hover {
-    background: linear-gradient(135deg, #3b82f6, #2563eb) !important;
-    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3) !important;
+button.accounting-btn-primary:hover {
+    background: linear-gradient(135deg, #3b82f6, #2563eb);
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
 }
 
 /* 响应式 */
 @media (max-width: 600px) {
     /* 让模态框容器顶部对齐 */
-    .modal-container:has(.quick-entry-modal) {
-        align-items: flex-start !important;
+    .quick-entry-container {
+        align-items: flex-start;
         padding-top: 10vh; /* 距离顶部 10vh */
     }
     
@@ -1425,7 +1425,7 @@
     width: 100%;
     min-height: 300px;
     padding: 16px;
-    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-family: SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
     font-size: 13px;
     line-height: 1.5;
     border: 1px solid var(--background-modifier-border);
