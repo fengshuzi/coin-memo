@@ -693,15 +693,6 @@
     gap: 15px;
     margin-bottom: 20px;
 }
-    .category-name {
-        font-size: 13px;
-        padding: 6px 10px;
-    }
-    
-    .delete-category-btn {
-        margin-left: 0;
-    }
-}
 
 /* 分类配置模态框样式 - Notion 风格 */
 .category-config-modal {
