@@ -3973,8 +3973,8 @@ export default class AccountingPlugin extends Plugin {
             });
         }
         
-        // 激活视图
-        workspace.setActiveLeaf(leaf, { focus: true });
+        // 激活视图并确保已有的自定义标签页真正切到前台
+        await workspace.revealLeaf(leaf);
         
         // 强制刷新数据
         if (leaf.view instanceof AccountingView) {
