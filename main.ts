@@ -8,6 +8,7 @@ interface AccountingConfig {
     categories: Record<string, string>;
     expenseEmoji: string;
     journalsPath: string;
+    dateFormat: string; // 日记文件日期命名格式，默认 yyyy-MM-dd
     defaultCategory?: string; // 默认分类关键词
     enableQuickCopy?: boolean; // 启用快速记账功能
     quickCopyDays?: number; // 快速记账显示最近N天的记录
@@ -135,6 +136,110 @@ function formatLocalDate(date: Date): string {
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
+}
+
+// ── 日期格式工具函数 ─────────────────────────────────────────────────────────
+
+interface DateFormatToken {
+    component: 'year' | 'month' | 'day';
+}
+
+const formatTokenCache = new Map<string, { regex: RegExp; tokens: DateFormatToken[] }>();
+
+/** 解析日期格式字符串，返回正则和 token 数组（结果缓存） */
+function parseFormatTokens(format: string): { regex: RegExp; tokens: DateFormatToken[] } {
+    const cached = formatTokenCache.get(format);
+    if (cached) return cached;
+
+    const tokens: DateFormatToken[] = [];
+    let pattern = '';
+    let i = 0;
+    while (i < format.length) {
+        if ((format.startsWith('YYYY', i) || format.startsWith('yyyy', i)) && (i + 4 <= format.length)) {
+            pattern += '(\\d{4})';
+            tokens.push({ component: 'year' });
+            i += 4;
+        } else if (format.startsWith('MM', i)) {
+            pattern += '(\\d{2})';
+            tokens.push({ component: 'month' });
+            i += 2;
+        } else if ((format.startsWith('DD', i) || format.startsWith('dd', i)) && (i + 2 <= format.length)) {
+            pattern += '(\\d{2})';
+            tokens.push({ component: 'day' });
+            i += 2;
+        } else {
+            pattern += escapeRegex(format[i]);
+            i += 1;
+        }
+    }
+    const result = { regex: new RegExp(pattern), tokens };
+    formatTokenCache.set(format, result);
+    return result;
+}
+
+/** 按配置格式生成日期字符串 */
+function formatFileDate(date: Date, format: string): string {
+    const year = date.getFullYear().toString();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return format
+        .replace(/yyyy|YYYY/g, year)
+        .replace(/MM/g, month)
+        .replace(/dd|DD/g, day);
+}
+
+/** 生成匹配日期文件名的正则（用于文件过滤） */
+function buildFilenameRegex(format: string): RegExp {
+    const { regex } = parseFormatTokens(format);
+    return new RegExp('^' + regex.source + '\\.md$');
+}
+
+/** 从正则匹配结果中提取 ISO 日期 */
+function extractISOFromMatch(match: RegExpMatchArray, tokens: DateFormatToken[]): string | null {
+    let year = '', month = '', day = '';
+    for (let i = 0; i < tokens.length; i++) {
+        const val = match[i + 1];
+        if (tokens[i].component === 'year') year = val;
+        else if (tokens[i].component === 'month') month = val;
+        else if (tokens[i].component === 'day') day = val;
+    }
+    const iso = `${year}-${month}-${day}`;
+    const parsed = new Date(iso);
+    if (isNaN(parsed.getTime())) return null;
+    return iso;
+}
+
+/** 从相对路径提取日期，返回 ISO 字符串 */
+function parseDateFromPath(relativePath: string, format: string): string | null {
+    const { regex, tokens } = parseFormatTokens(format);
+    const fullRegex = new RegExp('^' + regex.source + '\\.md$');
+    const match = relativePath.match(fullRegex);
+    if (!match) return null;
+    return extractISOFromMatch(match, tokens);
+}
+
+/** 从字符串中提取日期，返回 ISO 字符串 */
+function parseDateFromString(str: string, format: string): string | null {
+    const { regex, tokens } = parseFormatTokens(format);
+    const match = str.match(regex);
+    if (!match) return null;
+    return extractISOFromMatch(match, tokens);
+}
+
+/** ISO 日期转换为文件格式日期 */
+function isoToFileDate(isoDate: string, format: string): string {
+    const parts = isoDate.split('-');
+    if (parts.length !== 3) return isoDate;
+    return formatFileDate(
+        new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2])),
+        format
+    );
+}
+
+/** 补录日期正则：同时匹配配置格式和 ISO 格式 */
+function buildBackfillRegex(format: string): RegExp {
+    const { regex } = parseFormatTokens(format);
+    return new RegExp('(' + regex.source + '|\\d{4}-\\d{2}-\\d{2})');
 }
 
 // ── 账单解析器基础结构 ─────────────────────────────────────────────────────────
@@ -505,7 +610,8 @@ class ReclassifyEngine {
         rules: ReclassifyRule[],
         records: AccountingRecord[],
         expenseEmoji: string,
-        journalsPath: string
+        journalsPath: string,
+        dateFormat: string
     ): PreviewResult {
         const matches: ReclassifyMatch[] = [];
 
@@ -525,7 +631,7 @@ class ReclassifyEngine {
                         expenseEmoji,
                         rule.rewriteDescription
                     );
-                    const filePath = `${journalsPath}/${record.fileDate}.md`;
+                    const filePath = `${journalsPath}/${isoToFileDate(record.fileDate, dateFormat)}.md`;
                     matches.push({ rule, record, newRawLine, filePath });
                     break; // 先到先得，只取第一条匹配规则
                 }
@@ -641,16 +747,19 @@ class AccountingParser {
         const amountWithUnit = new RegExp(amountMatch[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(块钱|元|块)?');
         const description = restContent.replace(amountWithUnit, '').trim();
         
-        // 检查描述中是否包含日期（支持账单补录）
+        // 检查描述中是否包含日期（支持账单补录，兼容配置格式和 ISO 格式）
         let recordDate = fileDate;
-        const dateRegex = /(\d{4}-\d{2}-\d{2})/;
+        const dateRegex = buildBackfillRegex(this.config.dateFormat);
         const dateMatch = description.match(dateRegex);
-        
+
         if (dateMatch) {
-            // 验证日期格式是否有效
-            const parsedDate = new Date(dateMatch[1]);
-            if (!isNaN(parsedDate.getTime())) {
-                recordDate = dateMatch[1];
+            const matchedDate = dateMatch[1];
+            // 如果是 ISO 格式直接使用，否则从配置格式转换
+            if (/^\d{4}-\d{2}-\d{2}$/.test(matchedDate)) {
+                recordDate = matchedDate;
+            } else {
+                const isoDate = parseDateFromString(matchedDate, this.config.dateFormat);
+                if (isoDate) recordDate = isoDate;
             }
         }
         
@@ -672,9 +781,13 @@ class AccountingParser {
         const lines = content.split('\n');
         const records: AccountingRecord[] = [];
         
-        // 从文件路径提取日期
-        const dateMatch = filePath.match(/(\d{4}-\d{2}-\d{2})/);
-        const fileDate = dateMatch ? dateMatch[1] : formatLocalDate(new Date());
+        // 从文件路径提取日期（使用配置的日期格式）
+        const journalsPrefix = this.config.journalsPath + '/';
+        let relativePath = filePath;
+        if (filePath.startsWith(journalsPrefix)) {
+            relativePath = filePath.substring(journalsPrefix.length);
+        }
+        const fileDate = parseDateFromPath(relativePath, this.config.dateFormat) || formatLocalDate(new Date());
 
         lines.forEach(line => {
             const record = this.parseRecord(line, fileDate);
@@ -815,7 +928,7 @@ class AccountingStorage {
             for (let i = 0; i < 5; i++) {
                 const date = new Date(today);
                 date.setDate(date.getDate() - i);
-                const dateStr = formatLocalDate(date);
+                const dateStr = formatFileDate(date, this.config.dateFormat);
                 const fileName = `${dateStr}.md`;
                 const filePath = `${this.config.journalsPath}/${fileName}`;
                 const file = this.app.vault.getAbstractFileByPath(filePath);
@@ -942,9 +1055,14 @@ class AccountingStorage {
             file.path.startsWith(this.config.journalsPath)
         );
 
-        // 只保留符合日期格式 yyyy-mm-dd.md 的文件
-        const datePattern = /\d{4}-\d{2}-\d{2}\.md$/;
-        const dateFiles = allFiles.filter(file => datePattern.test(file.name));
+        // 只保留符合日期格式的文件
+        const datePattern = buildFilenameRegex(this.config.dateFormat);
+        const journalsPrefix = this.config.journalsPath + '/';
+        const dateFiles = allFiles.filter(file => {
+            if (!file.path.startsWith(journalsPrefix)) return false;
+            const relativePath = file.path.substring(journalsPrefix.length);
+            return datePattern.test(relativePath);
+        });
         
         // 构建正则表达式 - 匹配 #关键词 后面跟数字（可能有空格，也可能没有）
         const keywordPattern = keywords.join('|');
@@ -2315,7 +2433,7 @@ class QuickEntryModal extends Modal {
         try {
             // 获取今天的日记文件路径
             const today = new Date();
-            const dateStr = formatLocalDate(today);
+            const dateStr = formatFileDate(today, this.plugin.config.dateFormat);
             const journalPath = `${this.plugin.config.journalsPath}/${dateStr}.md`;
             
             // 构建记账记录（不带换行符，添加列表符号）
@@ -2517,7 +2635,7 @@ class QuickCopyModal extends Modal {
             this.close();
 
             // 跳转到今天的日记
-            await this.openJournalFileIfNotOpen(formatLocalDate(new Date()));
+            await this.openJournalFileIfNotOpen(formatFileDate(new Date(), this.plugin.config.dateFormat));
 
             if (this.onSave) {
                 await this.onSave();
@@ -2531,7 +2649,7 @@ class QuickCopyModal extends Modal {
     editAndCopyRecord(record: AccountingRecord) {
         new EditCopyModal(this.app, this.plugin, record, async () => {
             this.close();
-            await this.openJournalFileIfNotOpen(formatLocalDate(new Date()));
+            await this.openJournalFileIfNotOpen(formatFileDate(new Date(), this.plugin.config.dateFormat));
             if (this.onSave) {
                 await this.onSave();
             }
@@ -2539,7 +2657,7 @@ class QuickCopyModal extends Modal {
     }
 
     async appendRecordToJournal(recordLine: string) {
-        const today = formatLocalDate(new Date());
+        const today = formatFileDate(new Date(), this.plugin.config.dateFormat);
         const journalPath = `${this.plugin.config.journalsPath}/${today}.md`;
         const file = this.app.vault.getAbstractFileByPath(journalPath);
 
@@ -2698,7 +2816,7 @@ class EditCopyModal extends Modal {
     }
 
     async appendRecordToJournal(recordLine: string) {
-        const today = formatLocalDate(new Date());
+        const today = formatFileDate(new Date(), this.plugin.config.dateFormat);
         const journalPath = `${this.plugin.config.journalsPath}/${today}.md`;
         const file = this.app.vault.getAbstractFileByPath(journalPath);
 
@@ -2872,13 +2990,13 @@ class BillImportModal extends Modal {
             await this.deleteBillFile();
             new Notice('✅ 记账成功，账单已清除');
             this.close();
-            await this.openJournalFileIfNotOpen(formatLocalDate(new Date()));
+            await this.openJournalFileIfNotOpen(formatFileDate(new Date(), this.plugin.config.dateFormat));
             if (this.onSave) await this.onSave();
         }
     }
 
     async appendRecordToJournal(recordLine: string) {
-        const today = formatLocalDate(new Date());
+        const today = formatFileDate(new Date(), this.plugin.config.dateFormat);
         const journalPath = `${this.plugin.config.journalsPath}/${today}.md`;
         const file = this.app.vault.getAbstractFileByPath(journalPath);
 
@@ -3539,7 +3657,8 @@ class AccountingView extends ItemView {
                 const nextKeyword = catKeys[nextIdx];
 
                 // 更新文件内容
-                const journalPath = `${this.plugin.config.journalsPath}/${record.fileDate}.md`;
+                const fileDate = isoToFileDate(record.fileDate, this.plugin.config.dateFormat);
+                const journalPath = `${this.plugin.config.journalsPath}/${fileDate}.md`;
                 const file = this.app.vault.getAbstractFileByPath(journalPath);
                 if (file instanceof TFile) {
                     let content = await this.app.vault.read(file);
@@ -3555,7 +3674,7 @@ class AccountingView extends ItemView {
             // 显示描述，如果是补录则高亮日期
             const descDiv = recordInfo.createDiv({ cls: 'record-description' });
             if (record.isBackfill) {
-                const dateRegex = /(\d{4}-\d{2}-\d{2})/;
+                const dateRegex = buildBackfillRegex(this.plugin.config.dateFormat);
                 const parts = record.description.split(dateRegex);
                 for (let i = 0; i < parts.length; i++) {
                     if (i % 2 === 1 && dateRegex.test(parts[i])) {
@@ -3598,8 +3717,8 @@ class AccountingView extends ItemView {
     }
 
     async openJournalFile(date: string) {
-        const fileName = `${date}.md`;
-        const filePath = `${this.plugin.config.journalsPath}/${fileName}`;
+        const fileDate = isoToFileDate(date, this.plugin.config.dateFormat);
+        const filePath = `${this.plugin.config.journalsPath}/${fileDate}.md`;
         
         const file = this.app.vault.getAbstractFileByPath(filePath);
         if (file instanceof TFile) {
@@ -3914,6 +4033,9 @@ export default class AccountingPlugin extends Plugin {
                 if (!this.config.journalsPath || typeof this.config.journalsPath !== 'string') {
                     this.config.journalsPath = 'journals';
                 }
+                if (!this.config.dateFormat || typeof this.config.dateFormat !== 'string') {
+                    this.config.dateFormat = 'yyyy-MM-dd';
+                }
             } else {
                 this.config = this.getDefaultConfig();
             }
@@ -3944,15 +4066,16 @@ export default class AccountingPlugin extends Plugin {
             appName: "每日记账",
             categories: {
                 "cy": "餐饮",
-                "jt": "交通",
+                "jt": "交通出行",
                 "gw": "购物",
                 "dk": "贷款",
                 "jf": "生活缴费",
                 "qt": "其他"
             },
-            defaultCategory: "cy", // 默认分类为餐饮
+            defaultCategory: "jt", // 默认分类为交通出行
             expenseEmoji: "#",
             journalsPath: "journals",
+            dateFormat: "yyyy-MM-dd",
             enableQuickCopy: true, // 默认启用快速记账
             quickCopyDays: 14 // 默认显示最近14天的记录
         };
@@ -4004,7 +4127,8 @@ export default class AccountingPlugin extends Plugin {
                 autoRules,
                 recentRecords,
                 this.config.expenseEmoji,
-                this.config.journalsPath
+                this.config.journalsPath,
+                this.config.dateFormat
             );
             if (result.totalCount === 0) return;
 
@@ -4141,7 +4265,7 @@ export default class AccountingPlugin extends Plugin {
             const { keyword, description } = matchMerchantCategory(this.config, billInfo.merchant);
             const emoji = this.config.expenseEmoji;
             const recordLine = `- ${emoji}${keyword}${description ? ' ' + description : ''} ${billInfo.amount}`;
-            const today = formatLocalDate(new Date());
+            const today = formatFileDate(new Date(), this.config.dateFormat);
             const journalPath = `${this.config.journalsPath}/${today}.md`;
 
             try {
@@ -4307,8 +4431,34 @@ class AccountingSettingTab extends PluginSettingTab {
                     await this.plugin.saveConfig();
                 }));
 
+        new Setting(containerEl)
+            .setName('日记文件命名格式')
+            .setDesc('日记文件的日期命名格式。修改后已有的日记文件需要对应重命名，否则将无法识别。')
+            .addDropdown(dropdown => dropdown
+                // eslint-disable-next-line obsidianmd/ui/sentence-case
+                .addOption('yyyy-MM-dd', 'yyyy-MM-dd (2026-05-28)')
+                // eslint-disable-next-line obsidianmd/ui/sentence-case
+                .addOption('yyyy年MM月dd日', 'yyyy年MM月dd日 (2026年05月28日)')
+                // eslint-disable-next-line obsidianmd/ui/sentence-case
+                .addOption('yyyy/MM/dd', 'yyyy/MM/dd (2026/05/28)')
+                // eslint-disable-next-line obsidianmd/ui/sentence-case
+                .addOption('yyyyMMdd', 'yyyyMMdd (20260528)')
+                // eslint-disable-next-line obsidianmd/ui/sentence-case
+                .addOption('DD-MM-YYYY', 'DD-MM-YYYY (28-05-2026)')
+                // eslint-disable-next-line obsidianmd/ui/sentence-case
+                .addOption('MM-dd-yyyy', 'MM-dd-yyyy (05-28-2026)')
+                .setValue(this.plugin.config.dateFormat || 'yyyy-MM-dd')
+                .onChange(async (value) => {
+                    this.plugin.config.dateFormat = value;
+                    await this.plugin.saveConfig();
+                    if (this.plugin.storage) {
+                        this.plugin.storage.clearCache();
+                        await this.plugin.refreshData();
+                    }
+                }));
+
         containerEl.createEl('p', {
-            text: '💡 提示：修改后会自动保存并刷新数据。日记文件应存放在此文件夹下，格式为 yyyy-mm-dd.md',
+            text: '💡 提示：修改后会自动保存并刷新数据。日记文件应存放在此文件夹下，格式默认为 yyyy-mm-dd.md，可在上方修改。',
             cls: 'setting-item-description'
         });
 
@@ -4682,7 +4832,8 @@ class ReclassifyView extends ItemView {
                 this.rules,
                 records,
                 this.plugin.config.expenseEmoji,
-                this.plugin.config.journalsPath
+                this.plugin.config.journalsPath,
+                this.plugin.config.dateFormat
             );
 
             // 渲染预览结果
