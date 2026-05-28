@@ -1,4 +1,4 @@
-import { Plugin, ItemView, Modal, Notice, Menu, TFile, TAbstractFile, TFolder, PluginSettingTab, Setting, App, WorkspaceLeaf } from 'obsidian';
+import { Plugin, ItemView, Modal, Notice, Menu, TFile, TAbstractFile, TFolder, PluginSettingTab, Setting, App, WorkspaceLeaf, setCssProps } from 'obsidian';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
 
@@ -137,6 +137,22 @@ function formatLocalDate(date: Date): string {
     const day = String(date.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
 }
+
+/** 尝试从 Daily Notes 核心插件获取日期格式，失败返回 null */
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unnecessary-type-assertion, @typescript-eslint/no-unsafe-return */
+function getDailyNoteFormat(app: App): string | null {
+    try {
+        const plugin = (app as any).internalPlugins.getPluginById('daily-notes');
+        if (!plugin?.enabled) return null;
+        const format = (plugin.instance as any)?.options?.format;
+        if (!format) return null;
+        // moment 风格 token 转内部 token：大写 YYYY→yyyy, DD→dd
+        return format.replace(/YYYY/g, 'yyyy').replace(/DD/g, 'dd');
+    } catch {
+        return null;
+    }
+}
+/* eslint-enable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unnecessary-type-assertion, @typescript-eslint/no-unsafe-return */
 
 // ── 日期格式工具函数 ─────────────────────────────────────────────────────────
 
@@ -4034,7 +4050,8 @@ export default class AccountingPlugin extends Plugin {
                     this.config.journalsPath = 'journals';
                 }
                 if (!this.config.dateFormat || typeof this.config.dateFormat !== 'string') {
-                    this.config.dateFormat = 'yyyy-MM-dd';
+                    const detected = getDailyNoteFormat(this.app);
+                    this.config.dateFormat = detected || 'yyyy-MM-dd';
                 }
             } else {
                 this.config = this.getDefaultConfig();
@@ -4431,34 +4448,77 @@ class AccountingSettingTab extends PluginSettingTab {
                     await this.plugin.saveConfig();
                 }));
 
+        const presetFormats = ['yyyy-MM-dd', 'yyyy年MM月dd日', 'yyyy/MM/dd', 'yyyyMMdd', 'DD-MM-YYYY', 'MM-dd-yyyy'];
+        const currentFormat = this.plugin.config.dateFormat || 'yyyy-MM-dd';
+        const isPreset = presetFormats.includes(currentFormat);
+
+        let customInputSetting: Setting;
+
         new Setting(containerEl)
             .setName('日记文件命名格式')
-            .setDesc('日记文件的日期命名格式。修改后已有的日记文件需要对应重命名，否则将无法识别。')
-            .addDropdown(dropdown => dropdown
+            .setDesc('日记文件的日期命名格式。修改后已有的日记文件需要对应重命名。')
+            .addDropdown(dropdown => {
+                presetFormats.forEach(fmt => {
+                    dropdown.addOption(fmt, fmt);
+                });
+                dropdown.addOption('__custom__', '自定义...');
+                dropdown.setValue(isPreset ? currentFormat : '__custom__');
+                dropdown.onChange(async (value) => {
+                    if (value === '__custom__') {
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+                        setCssProps(customInputSetting.settingEl, { display: '' });
+                        const input = customInputSetting.settingEl.querySelector('input') as HTMLInputElement;
+                        if (input) {
+                            input.value = this.plugin.config.dateFormat || '';
+                            input.focus();
+                        }
+                    } else {
+                        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+                        setCssProps(customInputSetting.settingEl, { display: 'none' });
+                        this.plugin.config.dateFormat = value;
+                        await this.plugin.saveConfig();
+                        if (this.plugin.storage) {
+                            this.plugin.storage.clearCache();
+                            await this.plugin.refreshData();
+                        }
+                    }
+                });
+            });
+
+        customInputSetting = new Setting(containerEl)
+            .setName('自定义日期格式')
+            // eslint-disable-next-line obsidianmd/ui/sentence-case
+            .setDesc('输入自定义格式，Token 规则：yyyy/YYYY=年, MM=月, dd/DD=日')
+            .addText(text => text
                 // eslint-disable-next-line obsidianmd/ui/sentence-case
-                .addOption('yyyy-MM-dd', 'yyyy-MM-dd (2026-05-28)')
-                // eslint-disable-next-line obsidianmd/ui/sentence-case
-                .addOption('yyyy年MM月dd日', 'yyyy年MM月dd日 (2026年05月28日)')
-                // eslint-disable-next-line obsidianmd/ui/sentence-case
-                .addOption('yyyy/MM/dd', 'yyyy/MM/dd (2026/05/28)')
-                // eslint-disable-next-line obsidianmd/ui/sentence-case
-                .addOption('yyyyMMdd', 'yyyyMMdd (20260528)')
-                // eslint-disable-next-line obsidianmd/ui/sentence-case
-                .addOption('DD-MM-YYYY', 'DD-MM-YYYY (28-05-2026)')
-                // eslint-disable-next-line obsidianmd/ui/sentence-case
-                .addOption('MM-dd-yyyy', 'MM-dd-yyyy (05-28-2026)')
-                .setValue(this.plugin.config.dateFormat || 'yyyy-MM-dd')
+                .setPlaceholder('如: yyyy-MM-dd')
+                .setValue(isPreset ? '' : currentFormat)
                 .onChange(async (value) => {
-                    this.plugin.config.dateFormat = value;
-                    await this.plugin.saveConfig();
-                    if (this.plugin.storage) {
-                        this.plugin.storage.clearCache();
-                        await this.plugin.refreshData();
+                    const trimmed = value.trim();
+                    if (trimmed) {
+                        this.plugin.config.dateFormat = trimmed;
+                        await this.plugin.saveConfig();
+                        if (this.plugin.storage) {
+                            this.plugin.storage.clearCache();
+                            await this.plugin.refreshData();
+                        }
                     }
                 }));
 
+        if (isPreset) {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+            setCssProps(customInputSetting.settingEl, { display: 'none' });
+        }
+
+        const detectedFormat = getDailyNoteFormat(this.app);
+        const tipParts = ['修改后会自动保存并刷新数据。'];
+        if (detectedFormat) {
+            tipParts.push(`检测到日记插件格式: ${detectedFormat}，已自动应用。可在此改为单独格式。`);
+        } else {
+            tipParts.push('日记文件应存放在此文件夹下，格式默认为 yyyy-mm-dd.md。');
+        }
         containerEl.createEl('p', {
-            text: '💡 提示：修改后会自动保存并刷新数据。日记文件应存放在此文件夹下，格式默认为 yyyy-mm-dd.md，可在上方修改。',
+            text: `💡 提示：${tipParts.join('')}`,
             cls: 'setting-item-description'
         });
 
