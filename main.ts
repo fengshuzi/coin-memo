@@ -1,4 +1,4 @@
-import { Plugin, ItemView, Modal, Notice, Menu, TFile, TAbstractFile, TFolder, PluginSettingTab, Setting, App, WorkspaceLeaf, setCssProps } from 'obsidian';
+import { Plugin, ItemView, Modal, Notice, Menu, TFile, TAbstractFile, TFolder, PluginSettingTab, Setting, App, WorkspaceLeaf } from 'obsidian';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
 
@@ -138,21 +138,24 @@ function formatLocalDate(date: Date): string {
     return `${year}-${month}-${day}`;
 }
 
-/** 尝试从 Daily Notes 核心插件获取日期格式，失败返回 null */
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unnecessary-type-assertion, @typescript-eslint/no-unsafe-return */
-function getDailyNoteFormat(app: App): string | null {
+/** 从 Daily Notes 核心插件获取配置，失败返回 null */
+function getDailyNoteConfig(app: App): { format: string; folder: string } | null {
     try {
-        const plugin = (app as any).internalPlugins.getPluginById('daily-notes');
+        const internalPlugins = (app as unknown as { internalPlugins: { getPluginById(id: string): { enabled: boolean; instance: { options?: { format?: string; folder?: string } } } | null } }).internalPlugins;
+        const plugin = internalPlugins.getPluginById('daily-notes');
         if (!plugin?.enabled) return null;
-        const format = (plugin.instance as any)?.options?.format;
-        if (!format) return null;
-        // moment 风格 token 转内部 token：大写 YYYY→yyyy, DD→dd
-        return format.replace(/YYYY/g, 'yyyy').replace(/DD/g, 'dd');
+        const options = plugin.instance.options;
+        if (!options) return null;
+        const format = typeof options.format === 'string'
+            ? options.format.replace(/YYYY/g, 'yyyy').replace(/DD/g, 'dd')
+            : null;
+        const folder = typeof options.folder === 'string' ? options.folder : null;
+        if (!format && !folder) return null;
+        return { format: format || 'yyyy-MM-dd', folder: folder || '' };
     } catch {
         return null;
     }
 }
-/* eslint-enable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unnecessary-type-assertion, @typescript-eslint/no-unsafe-return */
 
 // ── 日期格式工具函数 ─────────────────────────────────────────────────────────
 
@@ -4045,13 +4048,13 @@ export default class AccountingPlugin extends Plugin {
             if (await adapter.exists(configPath)) {
                 const configContent = await adapter.read(configPath);
                 this.config = JSON.parse(configContent) as AccountingConfig;
-                // 确保 journalsPath 存在，如果不存在则使用默认值
+                // 优先从 Daily Notes 插件获取配置
+                const dailyNoteConfig = getDailyNoteConfig(this.app);
                 if (!this.config.journalsPath || typeof this.config.journalsPath !== 'string') {
-                    this.config.journalsPath = 'journals';
+                    this.config.journalsPath = dailyNoteConfig?.folder || 'journals';
                 }
                 if (!this.config.dateFormat || typeof this.config.dateFormat !== 'string') {
-                    const detected = getDailyNoteFormat(this.app);
-                    this.config.dateFormat = detected || 'yyyy-MM-dd';
+                    this.config.dateFormat = dailyNoteConfig?.format || 'yyyy-MM-dd';
                 }
             } else {
                 this.config = this.getDefaultConfig();
@@ -4407,9 +4410,14 @@ class AccountingSettingTab extends PluginSettingTab {
 
         new Setting(containerEl).setName('记账管理插件设置').setHeading();
 
+        const dailyNoteConfig = getDailyNoteConfig(this.app);
+        const journalsDesc = dailyNoteConfig?.folder
+            ? `检测到日记插件文件夹: ${dailyNoteConfig.folder}，已自动应用。可在此改为单独路径。`
+            : '日记文件存放的文件夹路径（相对 vault 根目录），默认为 journals';
+
         new Setting(containerEl)
             .setName('日记文件夹路径')
-            .setDesc('日记文件存放的文件夹路径（相对 vault 根目录），默认为 journals')
+            .setDesc(journalsDesc)
             .addText(text => text
                 .setPlaceholder('Journals')
                 .setValue(this.plugin.config.journalsPath || 'journals')
@@ -4465,16 +4473,14 @@ class AccountingSettingTab extends PluginSettingTab {
                 dropdown.setValue(isPreset ? currentFormat : '__custom__');
                 dropdown.onChange(async (value) => {
                     if (value === '__custom__') {
-                        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-                        setCssProps(customInputSetting.settingEl, { display: '' });
+                        customInputSetting.settingEl.show();
                         const input = customInputSetting.settingEl.querySelector('input') as HTMLInputElement;
                         if (input) {
                             input.value = this.plugin.config.dateFormat || '';
                             input.focus();
                         }
                     } else {
-                        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-                        setCssProps(customInputSetting.settingEl, { display: 'none' });
+                        customInputSetting.settingEl.hide();
                         this.plugin.config.dateFormat = value;
                         await this.plugin.saveConfig();
                         if (this.plugin.storage) {
@@ -4506,11 +4512,10 @@ class AccountingSettingTab extends PluginSettingTab {
                 }));
 
         if (isPreset) {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-            setCssProps(customInputSetting.settingEl, { display: 'none' });
+            customInputSetting.settingEl.hide();
         }
 
-        const detectedFormat = getDailyNoteFormat(this.app);
+        const detectedFormat = dailyNoteConfig?.format;
         const tipParts = ['修改后会自动保存并刷新数据。'];
         if (detectedFormat) {
             tipParts.push(`检测到日记插件格式: ${detectedFormat}，已自动应用。可在此改为单独格式。`);
