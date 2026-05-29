@@ -20,7 +20,12 @@ A daily expense tracking plugin for Obsidian that automatically recognizes and t
 
 ## Installation
 
-### Option 1: From GitHub Release (recommended)
+### Option 1: From Obsidian Community Plugins (Recommended)
+
+Open Obsidian Settings → Community Plugins → Browse, and search for **Coin Memo** or **fengshuzi** to install directly.
+
+
+### Option 2: From GitHub Release (recommended)
 
 1. Go to the [Releases](../../releases) page and download the latest version.
 2. Download `main.js`, `manifest.json`, `styles.css`, and `config.json`.
@@ -28,7 +33,7 @@ A daily expense tracking plugin for Obsidian that automatically recognizes and t
 4. Copy the downloaded files into that folder.
 5. Restart Obsidian and enable **Coin Memo** in Settings → Community plugins.
 
-### Option 2: Build from source
+### Option 3: Build from source
 
 ```bash
 cd /path/to/your/vault/.obsidian/plugins
