@@ -1,23 +1,46 @@
-import tsparser from "@typescript-eslint/parser";
-import { defineConfig } from "eslint/config";
+import tsParser from "@typescript-eslint/parser";
+import tsPlugin from "@typescript-eslint/eslint-plugin";
 import obsidianmd from "eslint-plugin-obsidianmd";
-import globals from "globals";
 
-export default defineConfig([
-  ...obsidianmd.configs.recommended,
+const strictReviewRules = {
+  "@typescript-eslint/no-explicit-any": "warn",
+  "@typescript-eslint/no-unsafe-assignment": "warn",
+  "@typescript-eslint/no-unsafe-member-access": "warn",
+  "@typescript-eslint/no-unsafe-call": "warn",
+  "@typescript-eslint/no-unsafe-argument": "warn",
+  "@typescript-eslint/no-unsafe-return": "warn",
+  "@typescript-eslint/no-unnecessary-type-assertion": "warn",
+  "@typescript-eslint/await-thenable": "warn",
+  "@typescript-eslint/no-floating-promises": "warn",
+};
+
+export default [
   {
-    files: ["**/*.ts"],
+    ignores: [
+      "dist/**",
+      "node_modules/**",
+      "coverage/**",
+      "*.js",
+      "*.mjs",
+      "*.cjs",
+      "*.config.*",
+      "**/*.d.ts",
+    ],
+  },
+  {
+    files: ["**/*.{ts,tsx}"],
     languageOptions: {
-      parser: tsparser,
-      parserOptions: { project: "./tsconfig.json" },
-      globals: {
-        ...globals.browser,
-        ...globals.node,
-        activeWindow: "readonly",
+      parser: tsParser,
+      parserOptions: {
+        project: "./tsconfig.json",
+        tsconfigRootDir: import.meta.dirname,
+        sourceType: "module",
       },
     },
-    rules: {
-      "obsidianmd/sample-names": "off",
+    plugins: {
+      "@typescript-eslint": tsPlugin,
+      obsidianmd,
     },
+    rules: strictReviewRules,
   },
-]);
+];
