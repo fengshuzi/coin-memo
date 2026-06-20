@@ -1,10 +1,10 @@
 {
-    "id": "coin-memo",
-    "name": "Coin Memo",
-    "version": "1.0.8",
-    "minAppVersion": "1.7.2",
-    "description": "基于日记文件的每日记账插件，支持自动识别和统计记账记录.",
-    "author": "lizhifeng",
-    "authorUrl": "https://github.com/fengshuzi",
-    "isDesktopOnly": false
+	"id": "coin-memo",
+	"name": "Coin Memo",
+	"version": "1.0.9",
+	"minAppVersion": "1.7.2",
+	"description": "基于日记文件的每日记账插件，支持自动识别和统计记账记录.",
+	"author": "lizhifeng",
+	"authorUrl": "https://github.com/fengshuzi",
+	"isDesktopOnly": false
 }

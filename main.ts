@@ -160,12 +160,19 @@ function getDailyNoteConfig(app: App): { format: string; folder: string } | null
 // ── 日期格式工具函数 ─────────────────────────────────────────────────────────
 
 interface DateFormatToken {
-    component: 'year' | 'month' | 'day';
+    component: 'year' | 'year2' | 'month' | 'day';
 }
+
+// 中文星期字符（周日/周天均匹配星期日）
+const WEEKDAY_CHAR_REGEX = /[一二三四五六日天]/;
+// 中文星期映射：getDay() 0=周日, 1=周一, ..., 6=周六
+const WEEKDAY_CHARS = ['日', '一', '二', '三', '四', '五', '六'];
 
 const formatTokenCache = new Map<string, { regex: RegExp; tokens: DateFormatToken[] }>();
 
-/** 解析日期格式字符串，返回正则和 token 数组（结果缓存） */
+/** 解析日期格式字符串，返回正则和 token 数组（结果缓存）
+ *  tokens 只包含带捕获组的日期分量（year/year2/month/day），
+ *  星期/周 等无捕获组的 token 不入列，保证 tokens 索引与 match[1..] 对齐。 */
 function parseFormatTokens(format: string): { regex: RegExp; tokens: DateFormatToken[] } {
     const cached = formatTokenCache.get(format);
     if (cached) return cached;
@@ -178,6 +185,10 @@ function parseFormatTokens(format: string): { regex: RegExp; tokens: DateFormatT
             pattern += '(\\d{4})';
             tokens.push({ component: 'year' });
             i += 4;
+        } else if ((format.startsWith('YY', i) || format.startsWith('yy', i)) && (i + 2 <= format.length)) {
+            pattern += '(\\d{2})';
+            tokens.push({ component: 'year2' });
+            i += 2;
         } else if (format.startsWith('MM', i)) {
             pattern += '(\\d{2})';
             tokens.push({ component: 'month' });
@@ -186,6 +197,14 @@ function parseFormatTokens(format: string): { regex: RegExp; tokens: DateFormatT
             pattern += '(\\d{2})';
             tokens.push({ component: 'day' });
             i += 2;
+        } else if (format.startsWith('星期', i)) {
+            pattern += '星期[一二三四五六日天]';
+            i += 2;
+            if (i < format.length && WEEKDAY_CHAR_REGEX.test(format[i])) i += 1;
+        } else if (format[i] === '周') {
+            pattern += '周[一二三四五六日天]';
+            i += 1;
+            if (i < format.length && WEEKDAY_CHAR_REGEX.test(format[i])) i += 1;
         } else {
             pattern += escapeRegex(format[i]);
             i += 1;
@@ -198,13 +217,18 @@ function parseFormatTokens(format: string): { regex: RegExp; tokens: DateFormatT
 
 /** 按配置格式生成日期字符串 */
 function formatFileDate(date: Date, format: string): string {
-    const year = date.getFullYear().toString();
+    const year4 = date.getFullYear().toString();
+    const year2 = year4.slice(-2);
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
+    const weekdayChar = WEEKDAY_CHARS[date.getDay()];
     return format
-        .replace(/yyyy|YYYY/g, year)
+        .replace(/yyyy|YYYY/g, year4)
+        .replace(/yy|YY/g, year2)
         .replace(/MM/g, month)
-        .replace(/dd|DD/g, day);
+        .replace(/dd|DD/g, day)
+        .replace(/星期[一二三四五六日天]?/g, '星期' + weekdayChar)
+        .replace(/周[一二三四五六日天]?/g, '周' + weekdayChar);
 }
 
 /** 生成匹配日期文件名的正则（用于文件过滤） */
@@ -219,6 +243,7 @@ function extractISOFromMatch(match: RegExpMatchArray, tokens: DateFormatToken[])
     for (let i = 0; i < tokens.length; i++) {
         const val = match[i + 1];
         if (tokens[i].component === 'year') year = val;
+        else if (tokens[i].component === 'year2') year = '20' + val;
         else if (tokens[i].component === 'month') month = val;
         else if (tokens[i].component === 'day') day = val;
     }
@@ -4456,7 +4481,7 @@ class AccountingSettingTab extends PluginSettingTab {
                     await this.plugin.saveConfig();
                 }));
 
-        const presetFormats = ['yyyy-MM-dd', 'yyyy年MM月dd日', 'yyyy/MM/dd', 'yyyyMMdd', 'DD-MM-YYYY', 'MM-dd-yyyy'];
+        const presetFormats = ['yyyy-MM-dd', 'yyyy年MM月dd日', 'yyyy/MM/dd', 'yyyyMMdd', 'DD-MM-YYYY', 'MM-dd-yyyy', 'yy.MM.dd', 'yy.MM.dd-星期', 'yy.MM.dd-周'];
         const currentFormat = this.plugin.config.dateFormat || 'yyyy-MM-dd';
         const isPreset = presetFormats.includes(currentFormat);
 
@@ -4494,7 +4519,7 @@ class AccountingSettingTab extends PluginSettingTab {
         customInputSetting = new Setting(containerEl)
             .setName('自定义日期格式')
             // eslint-disable-next-line obsidianmd/ui/sentence-case
-            .setDesc('输入自定义格式，Token 规则：yyyy/YYYY=年, MM=月, dd/DD=日')
+            .setDesc('Token 规则：yyyy/YYYY=四位年, yy/YY=两位年(26), MM=月, dd/DD=日, 星期/星期X=中文星期长格式(星期五), 周/周X=短格式(周五)')
             .addText(text => text
                 // eslint-disable-next-line obsidianmd/ui/sentence-case
                 .setPlaceholder('如: yyyy-MM-dd')
