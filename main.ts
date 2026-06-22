@@ -1711,7 +1711,7 @@ class CategoryConfigModal extends Modal {
             }
             
             // 等待一小段时间后重新打开
-            activeWindow.setTimeout(() => {
+            window.setTimeout(() => {
                 void this.plugin.activateView();
             }, 100);
         } catch (error) {
@@ -2164,7 +2164,7 @@ class ExportPDFModal extends Modal {
             ownerDoc.body.appendChild(tempContainer);
 
             // 等待渲染完成
-            await new Promise(resolve => activeWindow.setTimeout(resolve, 100));
+            await new Promise(resolve => window.setTimeout(resolve, 100));
 
             // 使用 html2canvas 将 HTML 转换为 canvas
             const canvas = await html2canvas(tempContainer, {
@@ -2429,7 +2429,7 @@ class QuickEntryModal extends Modal {
         });
         
         // 延迟聚焦，避免立即弹出输入法
-        activeWindow.setTimeout(() => {
+        window.setTimeout(() => {
             this.amountInput.focus();
         }, 100);
     }
@@ -2830,7 +2830,7 @@ class EditCopyModal extends Modal {
             if (e.key === 'Enter') void this.saveAndCopy();
         });
 
-        activeWindow.setTimeout(() => this.descInput.focus(), 100);
+        window.setTimeout(() => this.descInput.focus(), 100);
     }
 
     async saveAndCopy() {
@@ -2999,7 +2999,7 @@ class BillImportModal extends Modal {
             });
         });
 
-        activeWindow.setTimeout(() => this.descInput.focus(), 100);
+        window.setTimeout(() => this.descInput.focus(), 100);
     }
 
     async saveAndClose() {
@@ -3451,7 +3451,7 @@ class AccountingView extends ItemView {
         this.timeDisplay.removeClass('hidden');
         
         // 设置本月按钮为激活状态
-        activeWindow.setTimeout(() => {
+        window.setTimeout(() => {
             const thisMonthBtn = this.contentEl.querySelector('.quick-time-btn[data-range="thisMonth"]');
             if (thisMonthBtn) {
                 thisMonthBtn.classList.add('active');
@@ -4261,7 +4261,7 @@ export default class AccountingPlugin extends Plugin {
                 if (content.trim()) break;
             }
             if (i < MAX_RETRIES - 1) {
-                await new Promise(resolve => activeWindow.setTimeout(resolve, RETRY_DELAY));
+                await new Promise(resolve => window.setTimeout(resolve, RETRY_DELAY));
             }
         }
 
@@ -4390,7 +4390,7 @@ export default class AccountingPlugin extends Plugin {
         } else {
             // 如果视图未打开，先打开视图再导出
             await this.activateView();
-            activeWindow.setTimeout(() => {
+            window.setTimeout(() => {
                 const leaves = this.app.workspace.getLeavesOfType(ACCOUNTING_VIEW);
                 if (leaves.length > 0 && leaves[0].view instanceof AccountingView) {
                     const view = leaves[0].view;
@@ -4409,7 +4409,7 @@ export default class AccountingPlugin extends Plugin {
         } else {
             // 如果视图未打开，先打开视图再导出
             await this.activateView();
-            activeWindow.setTimeout(() => {
+            window.setTimeout(() => {
                 const leaves = this.app.workspace.getLeavesOfType(ACCOUNTING_VIEW);
                 if (leaves.length > 0 && leaves[0].view instanceof AccountingView) {
                     const view = leaves[0].view;
@@ -4518,10 +4518,8 @@ class AccountingSettingTab extends PluginSettingTab {
 
         customInputSetting = new Setting(containerEl)
             .setName('自定义日期格式')
-            // eslint-disable-next-line obsidianmd/ui/sentence-case
             .setDesc('Token 规则：yyyy/YYYY=四位年, yy/YY=两位年(26), MM=月, dd/DD=日, 星期/星期X=中文星期长格式(星期五), 周/周X=短格式(周五)')
             .addText(text => text
-                // eslint-disable-next-line obsidianmd/ui/sentence-case
                 .setPlaceholder('如: yyyy-MM-dd')
                 .setValue(isPreset ? '' : currentFormat)
                 .onChange(async (value) => {
