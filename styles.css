@@ -2549,3 +2549,115 @@ button.accounting-btn-primary:hover {
     color: var(--text-on-accent);
     border-color: var(--interactive-accent);
 }
+
+/* 深色主题 iOS 玻璃风 */
+.theme-dark .accounting-view {
+    --coin-glass-bg: rgba(20, 26, 36, 0.56);
+    --coin-glass-elevated: rgba(28, 35, 48, 0.66);
+    --coin-glass-strong: rgba(36, 44, 60, 0.76);
+    --coin-glass-border: rgba(255, 255, 255, 0.16);
+    --coin-glass-highlight: rgba(255, 255, 255, 0.08);
+    --coin-glass-text: #f5f7fb;
+    --coin-glass-muted: #c5cede;
+}
+
+.theme-dark .accounting-view .accounting-filters,
+.theme-dark .accounting-view .day-group,
+.theme-dark .accounting-view .category-item,
+.theme-dark .accounting-view .budget-section,
+.theme-dark .accounting-view .config-section,
+.theme-dark .accounting-view .category-list,
+.theme-dark .accounting-view .quick-copy-records,
+.theme-dark .accounting-view .reclassify-rule-editor,
+.theme-dark .accounting-view .reclassify-date-filter,
+.theme-dark .accounting-view .reclassify-preview-panel {
+    background: var(--coin-glass-bg);
+    border-color: var(--coin-glass-border);
+    box-shadow:
+        inset 0 1px 0 var(--coin-glass-highlight),
+        0 10px 30px rgba(0, 0, 0, 0.32);
+    backdrop-filter: blur(16px) saturate(150%);
+    -webkit-backdrop-filter: blur(16px) saturate(150%);
+}
+
+.theme-dark .accounting-view .day-header,
+.theme-dark .accounting-view .budget-toggle,
+.theme-dark .accounting-view .threshold-section,
+.theme-dark .accounting-view .budget-item,
+.theme-dark .accounting-view .reclassify-summary,
+.theme-dark .accounting-view .reclassify-group-header,
+.theme-dark .accounting-view .quick-copy-item,
+.theme-dark .accounting-view .edit-copy-category-display {
+    background: var(--coin-glass-elevated);
+    border-color: var(--coin-glass-border);
+}
+
+.theme-dark .accounting-view .filter-label,
+.theme-dark .accounting-view .current-time-display,
+.theme-dark .accounting-view .stat-label,
+.theme-dark .accounting-view .stat-progress,
+.theme-dark .accounting-view .budget-text,
+.theme-dark .accounting-view .category-count,
+.theme-dark .accounting-view .record-description,
+.theme-dark .accounting-view .quick-copy-desc,
+.theme-dark .accounting-view .reclassify-muted {
+    color: var(--coin-glass-muted);
+}
+
+.theme-dark .accounting-view .current-time-display {
+    background: rgba(125, 211, 252, 0.14);
+    border-color: rgba(125, 211, 252, 0.26);
+}
+
+.theme-dark .accounting-view .stats-overview .stat-card {
+    background: var(--coin-glass-strong);
+    border-color: var(--coin-glass-border);
+    box-shadow:
+        inset 0 1px 0 var(--coin-glass-highlight),
+        0 12px 34px rgba(0, 0, 0, 0.34);
+    backdrop-filter: blur(20px) saturate(165%);
+    -webkit-backdrop-filter: blur(20px) saturate(165%);
+}
+
+.theme-dark .accounting-view .stats-overview .stat-card.income {
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.34), rgba(20, 83, 45, 0.48));
+}
+
+.theme-dark .accounting-view .stats-overview .stat-card.expense {
+    background: linear-gradient(135deg, rgba(244, 63, 94, 0.32), rgba(127, 29, 29, 0.5));
+}
+
+.theme-dark .accounting-view .stats-overview .stat-card.balance.positive {
+    background: linear-gradient(135deg, rgba(45, 212, 191, 0.3), rgba(6, 95, 70, 0.5));
+}
+
+.theme-dark .accounting-view .stats-overview .stat-card.balance.negative {
+    background: linear-gradient(135deg, rgba(251, 113, 133, 0.3), rgba(127, 29, 29, 0.52));
+}
+
+.theme-dark .accounting-view .stats-overview .stat-card.budget {
+    background: linear-gradient(135deg, rgba(96, 165, 250, 0.34), rgba(30, 64, 175, 0.5));
+}
+
+.theme-dark .accounting-view .stats-overview .stat-card .stat-label,
+.theme-dark .accounting-view .stats-overview .stat-card .stat-value,
+.theme-dark .accounting-view .stats-overview .stat-card .stat-progress {
+    color: var(--coin-glass-text);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.26);
+}
+
+.theme-dark .accounting-view .budget-alert.warning {
+    background: linear-gradient(135deg, rgba(245, 158, 11, 0.24), rgba(146, 64, 14, 0.42));
+    color: #fdecc8;
+    border-left-color: rgba(245, 158, 11, 0.82);
+    backdrop-filter: blur(14px) saturate(140%);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+}
+
+.theme-dark .accounting-view .budget-alert.exceeded {
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.24), rgba(127, 29, 29, 0.44));
+    color: #ffe2e2;
+    border-left-color: rgba(239, 68, 68, 0.86);
+    backdrop-filter: blur(14px) saturate(140%);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+}
