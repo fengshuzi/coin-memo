@@ -127,6 +127,21 @@ interface ValidationError {
     message: string;
 }
 
+/** 批量改分类单条匹配 */
+interface BatchCategoryMatch {
+    record: AccountingRecord;
+    toCategory: string;
+    newRawLine: string;
+    filePath: string;
+}
+
+/** 批量改分类预览结果 */
+interface BatchCategoryPreview {
+    matches: BatchCategoryMatch[];
+    totalCount: number;
+    fileCount: number;
+}
+
 // 视图类型常量
 const RECLASSIFY_VIEW = 'coin-memo-reclassify';
 
@@ -689,6 +704,41 @@ class ReclassifyEngine {
             totalCount: matches.length,
             fileCount,
         };
+    }
+
+    /**
+     * 批量改分类：根据日期范围和源分类筛选，生成预览结果
+     */
+    static batchCategoryDryRun(
+        records: AccountingRecord[],
+        startDate: string,
+        endDate: string,
+        fromKeywords: string[],
+        toKeyword: string,
+        expenseEmoji: string,
+        journalsPath: string,
+        dateFormat: string
+    ): BatchCategoryPreview {
+        const matches: BatchCategoryMatch[] = [];
+        const fromSet = new Set(fromKeywords);
+
+        for (const record of records) {
+            if (record.keyword === toKeyword) continue;
+            if (!fromSet.has(record.keyword)) continue;
+            if (record.date < startDate || record.date > endDate) continue;
+
+            const newRawLine = ReclassifyEngine.replaceKeyword(
+                record.rawLine,
+                record.keyword,
+                toKeyword,
+                expenseEmoji
+            );
+            const filePath = `${journalsPath}/${isoToFileDate(record.fileDate, dateFormat)}.md`;
+            matches.push({ record, toCategory: toKeyword, newRawLine, filePath });
+        }
+
+        const fileCount = new Set(matches.map(m => m.filePath)).size;
+        return { matches, totalCount: matches.length, fileCount };
     }
 
     /**
@@ -4742,6 +4792,20 @@ class ReclassifyView extends ItemView {
     startDate: string = '';
     endDate: string = '';
 
+    // 批量改分类状态
+    batchDateEnabled: boolean = false;
+    batchStartDate: string = '';
+    batchEndDate: string = '';
+    batchFromKeywords: Set<string> = new Set();
+    batchToKeyword: string = '';
+    batchPreview: BatchCategoryPreview | null = null;
+    selectedBatchMatches: Set<BatchCategoryMatch> = new Set();
+
+    // 批量改分类 DOM 引用
+    batchPreviewEl: HTMLElement;
+    batchPreviewBtn: HTMLButtonElement;
+    batchExecuteBtn: HTMLButtonElement;
+
     // DOM 引用
     ruleListEl: HTMLElement;
     previewEl: HTMLElement;
@@ -4941,6 +5005,76 @@ class ReclassifyView extends ItemView {
         if (!startDate || !endDate) return '请选择完整的日期范围';
         if (startDate > endDate) return '开始日期不能晚于结束日期';
         return null;
+    }
+
+    // 渲染批量改分类区域
+    private renderBatchCategoryEditor(container: HTMLElement): void {
+        const section = container.createDiv('reclassify-batch-editor');
+        section.createEl('h3', { text: '批量改分类' });
+
+        // 日期范围
+        const dateRow = section.createDiv('reclassify-batch-row');
+        const dateCb = dateRow.createEl('input', { type: 'checkbox' });
+        dateRow.createEl('label', { text: ' 启用日期范围' });
+        const dateInputs = section.createDiv('reclassify-batch-date-inputs reclassify-batch-date-inputs--hidden');
+        dateInputs.createEl('label', { text: '开始日期：' });
+        const startInput = dateInputs.createEl('input', { type: 'date' });
+        dateInputs.createEl('label', { text: '结束日期：' });
+        const endInput = dateInputs.createEl('input', { type: 'date' });
+
+        dateCb.onchange = () => {
+            this.batchDateEnabled = dateCb.checked;
+            dateInputs.toggleClass('reclassify-batch-date-inputs--hidden', !dateCb.checked);
+        };
+        startInput.onchange = () => { this.batchStartDate = startInput.value; };
+        endInput.onchange = () => { this.batchEndDate = endInput.value; };
+
+        // 源分类多选
+        const fromRow = section.createDiv('reclassify-batch-row');
+        fromRow.createEl('label', { text: '源分类（可多选）：', cls: 'reclassify-batch-label' });
+        const fromContainer = section.createDiv('reclassify-batch-from-categories');
+        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]) => {
+            const label = fromContainer.createEl('label', { cls: 'reclassify-batch-checkbox' });
+            const cb = label.createEl('input', { type: 'checkbox', value: keyword });
+            label.appendText(` ${categoryName}`);
+            cb.onchange = () => {
+                if (cb.checked) {
+                    this.batchFromKeywords.add(keyword);
+                } else {
+                    this.batchFromKeywords.delete(keyword);
+                }
+            };
+        });
+
+        // 目标分类
+        const toRow = section.createDiv('reclassify-batch-row');
+        toRow.createEl('label', { text: '目标分类：', cls: 'reclassify-batch-label' });
+        const toSelect = toRow.createEl('select', { cls: 'reclassify-batch-to-select' });
+        const placeholderOpt = toSelect.createEl('option', { text: '请选择目标分类', value: '' });
+        placeholderOpt.disabled = true;
+        placeholderOpt.selected = true;
+        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]) => {
+            toSelect.createEl('option', { text: `${categoryName} (${keyword})`, value: keyword });
+        });
+        toSelect.onchange = () => { this.batchToKeyword = toSelect.value; };
+
+        // 按钮行
+        const btnRow = section.createDiv('reclassify-batch-btn-row');
+        this.batchPreviewBtn = btnRow.createEl('button', {
+            text: '预览',
+            cls: 'accounting-btn accounting-btn-primary'
+        });
+        this.batchPreviewBtn.onclick = () => { void this.runBatchCategoryPreview(); };
+
+        this.batchExecuteBtn = btnRow.createEl('button', {
+            text: '执行修改',
+            cls: 'accounting-btn reclassify-execute-btn'
+        });
+        this.batchExecuteBtn.disabled = true;
+        this.batchExecuteBtn.onclick = () => { void this.executeBatchCategoryCommit(); };
+
+        // 预览内容区
+        this.batchPreviewEl = section.createDiv('reclassify-batch-preview-content');
     }
 
     // 任务 10.1：渲染日期范围筛选区
@@ -5247,6 +5381,234 @@ class ReclassifyView extends ItemView {
         });
     }
 
+    // 批量改分类：执行预览
+    private async runBatchCategoryPreview(): Promise<void> {
+        if (this.batchFromKeywords.size === 0) {
+            this.batchPreviewEl.empty();
+            this.batchPreviewEl.createEl('p', { text: '请至少选择一个源分类', cls: 'reclassify-error-msg' });
+            return;
+        }
+        if (!this.batchToKeyword) {
+            this.batchPreviewEl.empty();
+            this.batchPreviewEl.createEl('p', { text: '请选择目标分类', cls: 'reclassify-error-msg' });
+            return;
+        }
+
+        let startDate = this.batchStartDate;
+        let endDate = this.batchEndDate;
+        if (this.batchDateEnabled) {
+            const dateError = this.validateDateRange(startDate, endDate);
+            if (dateError) {
+                this.batchPreviewEl.empty();
+                this.batchPreviewEl.createEl('p', { text: dateError, cls: 'reclassify-error-msg' });
+                return;
+            }
+        } else {
+            // 未启用日期范围时默认所有时间
+            startDate = '1970-01-01';
+            endDate = '2099-12-31';
+        }
+
+        this.batchPreviewBtn.disabled = true;
+        this.batchExecuteBtn.disabled = true;
+        this.batchPreviewEl.empty();
+        this.batchPreviewEl.createEl('p', { text: '正在扫描记录...', cls: 'reclassify-loading' });
+
+        try {
+            const records = await this.plugin.storage.getAllRecords();
+            this.batchPreview = ReclassifyEngine.batchCategoryDryRun(
+                records,
+                startDate,
+                endDate,
+                Array.from(this.batchFromKeywords),
+                this.batchToKeyword,
+                this.plugin.config.expenseEmoji,
+                this.plugin.config.journalsPath,
+                this.plugin.config.dateFormat
+            );
+            this.renderBatchCategoryPreview();
+        } catch (error) {
+            console.error('批量改分类预览失败:', error);
+            this.batchPreviewEl.empty();
+            this.batchPreviewEl.createEl('p', { text: '预览失败，请重试', cls: 'reclassify-error-msg' });
+        } finally {
+            this.batchPreviewBtn.disabled = false;
+        }
+    }
+
+    // 批量改分类：渲染预览结果
+    private renderBatchCategoryPreview(): void {
+        this.batchPreviewEl.empty();
+        this.selectedBatchMatches = new Set();
+
+        if (!this.batchPreview) return;
+        const { matches, totalCount, fileCount } = this.batchPreview;
+
+        if (totalCount === 0) {
+            this.batchPreviewEl.createEl('p', { text: '未找到匹配记录', cls: 'reclassify-no-match' });
+            this.batchExecuteBtn.disabled = true;
+            return;
+        }
+
+        this.selectedBatchMatches = new Set(matches);
+
+        const summary = this.batchPreviewEl.createDiv('reclassify-summary');
+        const summaryText = summary.createEl('p', {
+            text: `共匹配 ${totalCount} 条记录，涉及 ${fileCount} 个文件，已选 ${totalCount} 条`,
+            cls: 'reclassify-summary-text'
+        });
+
+        const updateExecuteBtn = () => {
+            this.batchExecuteBtn.disabled = this.selectedBatchMatches.size === 0;
+            summaryText.textContent = `共匹配 ${totalCount} 条记录，涉及 ${fileCount} 个文件，已选 ${this.selectedBatchMatches.size} 条`;
+        };
+
+        const table = this.batchPreviewEl.createEl('table', { cls: 'reclassify-preview-table' });
+        const thead = table.createEl('thead');
+        const headerRow = thead.createEl('tr');
+        const thCheck = headerRow.createEl('th');
+        const selectAllCb = thCheck.createEl('input', { type: 'checkbox' });
+        selectAllCb.checked = true;
+        ['日期', '原始分类', '备注', '金额', '修改后分类'].forEach(col => {
+            headerRow.createEl('th', { text: col });
+        });
+
+        const tbody = table.createEl('tbody');
+        const rowCheckboxes: HTMLInputElement[] = [];
+
+        matches.forEach(match => {
+            const tr = tbody.createEl('tr');
+            const origCategory = this.plugin.config.categories[match.record.keyword] || match.record.keyword;
+            const newCategory = this.plugin.config.categories[match.toCategory] || match.toCategory;
+
+            const tdCheck = tr.createEl('td');
+            const rowCb = tdCheck.createEl('input', { type: 'checkbox' });
+            rowCb.checked = true;
+            rowCheckboxes.push(rowCb);
+
+            rowCb.onchange = () => {
+                if (rowCb.checked) {
+                    this.selectedBatchMatches.add(match);
+                    tr.removeClass('reclassify-row-deselected');
+                } else {
+                    this.selectedBatchMatches.delete(match);
+                    tr.addClass('reclassify-row-deselected');
+                }
+                const checkedCount = rowCheckboxes.filter(cb => cb.checked).length;
+                selectAllCb.checked = checkedCount === rowCheckboxes.length;
+                selectAllCb.indeterminate = checkedCount > 0 && checkedCount < rowCheckboxes.length;
+                updateExecuteBtn();
+            };
+
+            tr.createEl('td', { text: match.record.date });
+            tr.createEl('td', { text: origCategory });
+            tr.createEl('td', { text: match.record.description || '-' });
+            tr.createEl('td', { text: `¥${match.record.amount.toFixed(2)}` });
+            tr.createEl('td', { text: newCategory, cls: 'reclassify-new-category' });
+        });
+
+        selectAllCb.onchange = () => {
+            rowCheckboxes.forEach((cb, i) => {
+                cb.checked = selectAllCb.checked;
+                const match = matches[i];
+                const tr = cb.closest('tr') as HTMLElement;
+                if (selectAllCb.checked) {
+                    this.selectedBatchMatches.add(match);
+                    tr?.removeClass('reclassify-row-deselected');
+                } else {
+                    this.selectedBatchMatches.delete(match);
+                    tr?.addClass('reclassify-row-deselected');
+                }
+            });
+            selectAllCb.indeterminate = false;
+            updateExecuteBtn();
+        };
+
+        this.batchExecuteBtn.disabled = false;
+    }
+
+    // 批量改分类：执行修改
+    private async executeBatchCategoryCommit(): Promise<void> {
+        if (!this.batchPreview || this.selectedBatchMatches.size === 0) return;
+
+        const selectedList = Array.from(this.selectedBatchMatches);
+        const selectedCount = selectedList.length;
+        const selectedFileCount = new Set(selectedList.map(m => m.filePath)).size;
+
+        await new Promise<void>((resolve) => {
+            const modal = new Modal(this.app);
+            modal.titleEl.setText('确认批量修改');
+            modal.contentEl.createEl('p', {
+                text: `将修改 ${selectedCount} 条记录，涉及 ${selectedFileCount} 个文件，此操作不可撤销，确认继续？`
+            });
+
+            const btnRow = modal.contentEl.createDiv({ cls: 'modal-button-container' });
+
+            const confirmBtn = btnRow.createEl('button', { text: '确认', cls: 'mod-cta' });
+            confirmBtn.onclick = async () => {
+                modal.close();
+                try {
+                    const fileGroups = new Map<string, BatchCategoryMatch[]>();
+                    for (const match of selectedList) {
+                        if (!fileGroups.has(match.filePath)) {
+                            fileGroups.set(match.filePath, []);
+                        }
+                        fileGroups.get(match.filePath)!.push(match);
+                    }
+
+                    const failedFiles: string[] = [];
+                    for (const [filePath, fileMatches] of fileGroups) {
+                        try {
+                            const file = this.app.vault.getAbstractFileByPath(filePath);
+                            if (!(file instanceof TFile)) {
+                                failedFiles.push(filePath);
+                                continue;
+                            }
+                            let content = await this.app.vault.read(file);
+                            const originalContent = content;
+                            for (const match of fileMatches) {
+                                content = content.replace(match.record.rawLine, match.newRawLine);
+                            }
+                            if (content !== originalContent) {
+                                await this.app.vault.modify(file, content);
+                            }
+                        } catch {
+                            failedFiles.push(filePath);
+                        }
+                    }
+
+                    if (failedFiles.length > 0) {
+                        new Notice(`${failedFiles.length} 个文件写入失败`);
+                    } else {
+                        new Notice(`批量修改完成：已修改 ${selectedCount} 条记录`);
+                    }
+
+                    this.plugin.storage.clearCache();
+                    this.batchPreview = null;
+                    this.selectedBatchMatches = new Set();
+                    this.batchExecuteBtn.disabled = true;
+                    this.batchPreviewEl.empty();
+                    this.batchPreviewEl.createEl('p', {
+                        text: '修改完成，可重新点击「预览」查看最新数据',
+                        cls: 'reclassify-done-hint'
+                    });
+                } catch (error) {
+                    console.error('批量改分类执行失败:', error);
+                    new Notice('批量修改失败，请重试');
+                }
+                resolve();
+            };
+
+            const cancelBtn = btnRow.createEl('button', { text: '取消' });
+            cancelBtn.onclick = () => {
+                modal.close();
+                resolve();
+            };
+
+            modal.open();
+        });
+    }
+
     // 渲染页面头部
     private renderHeader(container: HTMLElement): void {
         const header = container.createDiv('reclassify-header');
@@ -5265,6 +5627,7 @@ class ReclassifyView extends ItemView {
 	        this.loadRules();
 	        this.renderHeader(container);
 	        this.renderRuleEditor(container);
+	        this.renderBatchCategoryEditor(container);
 	        this.renderDateFilter(container);
 	        this.renderPreviewPanel(container);
 	        return Promise.resolve();
