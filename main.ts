@@ -3415,13 +3415,30 @@ class AccountingView extends ItemView {
         this.updateRecordsDisplay();
     }
 
-    async loadAllRecords(forceRefresh = false): Promise<void> {
+    async loadAllRecords(forceRefresh = false, preserveFilters = false): Promise<void> {
         try {
             this.currentRecords = await this.plugin.storage.getAllRecords(forceRefresh);
             this.currentStats = this.plugin.storage.calculateStatistics(this.currentRecords);
-            
-            // 默认显示本月数据
-            this.applyDefaultTimeRange();
+
+            if (preserveFilters && this.currentDateRange.start && this.currentDateRange.end) {
+                // 保留当前时间筛选和分类筛选
+                const filteredRecords = this.plugin.storage.filterRecordsByDateRange(
+                    this.currentRecords, this.currentDateRange.start, this.currentDateRange.end
+                );
+                this.filteredRecords = filteredRecords;
+                this.currentStats = this.plugin.storage.calculateStatistics(filteredRecords);
+
+                const base = this.filteredRecords.length > 0 ? this.filteredRecords : this.currentRecords;
+                this.categoryFilteredRecords = this.selectedCategory === ''
+                    ? base
+                    : base.filter(r => r.keyword === this.selectedCategory);
+
+                this.updateStatsDisplay();
+                this.updateRecordsDisplay(this.categoryFilteredRecords);
+            } else {
+                // 默认显示本月数据
+                this.applyDefaultTimeRange();
+            }
         } catch (error) {
             console.error('加载记账记录失败:', error);
             new Notice('加载记账记录失败');
@@ -3766,7 +3783,7 @@ class AccountingView extends ItemView {
                     );
                     content = content.replace(record.rawLine, newLine);
                     await this.app.vault.modify(file, content);
-                    await this.loadAllRecords();
+                    await this.loadAllRecords(false, true);
                 }
                 this.closeCategoryDropdown();
             };
@@ -4218,9 +4235,9 @@ export default class AccountingPlugin extends Plugin {
         // 激活视图并确保已有的自定义标签页真正切到前台
         await workspace.revealLeaf(leaf);
         
-        // 强制刷新数据
+        // 强制刷新数据，打开视图时重置筛选
         if (leaf.view instanceof AccountingView) {
-            await leaf.view.loadAllRecords(true);
+            await leaf.view.loadAllRecords(true, false);
         }
 
         // 执行标记了 autoApply 的重分类规则（静默，不弹窗）
@@ -4282,11 +4299,11 @@ export default class AccountingPlugin extends Plugin {
         workspace.setActiveLeaf(leaf, { focus: true });
     }
 
-    async refreshData() {
+    async refreshData(preserveFilters = true) {
         const leaves = this.app.workspace.getLeavesOfType(ACCOUNTING_VIEW);
         for (const leaf of leaves) {
             if (leaf.view instanceof AccountingView) {
-                await leaf.view.loadAllRecords();
+                await leaf.view.loadAllRecords(false, preserveFilters);
             }
         }
     }
