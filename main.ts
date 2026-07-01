@@ -147,11 +147,28 @@ type BatchTimeRange = 'all' | 'thisMonth' | 'lastMonth' | 'last6Months';
 // 视图类型常量
 const RECLASSIFY_VIEW = 'coin-memo-reclassify';
 
+type CategoryStatEntry = AccountingStats['categoryStats'][string];
+type MerchantMapEntry = { category: string; description?: string };
+
+/** 两位数补零（避免 padStart 在 ES6 lib 下的 unsafe 告警） */
+function pad2(value: number): string {
+    return value < 10 ? `0${value}` : String(value);
+}
+
+/** 类型安全的 Object.entries */
+function recordEntries<K extends string, V>(record: Record<K, V>): Array<[K, V]> {
+    return Object.entries(record) as Array<[K, V]>;
+}
+
+function categoryStatEntries(stats: Record<string, CategoryStatEntry>): Array<[string, CategoryStatEntry]> {
+    return recordEntries(stats);
+}
+
 // 辅助函数：格式化本地日期为 YYYY-MM-DD（避免 UTC 时区问题）
 function formatLocalDate(date: Date): string {
     const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
+    const month = pad2(date.getMonth() + 1);
+    const day = pad2(date.getDate());
     return `${year}-${month}-${day}`;
 }
 
@@ -236,8 +253,8 @@ function parseFormatTokens(format: string): { regex: RegExp; tokens: DateFormatT
 function formatFileDate(date: Date, format: string): string {
     const year4 = date.getFullYear().toString();
     const year2 = year4.slice(-2);
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
+    const month = pad2(date.getMonth() + 1);
+    const day = pad2(date.getDate());
     const weekdayChar = WEEKDAY_CHARS[date.getDay()];
     return format
         .replace(/yyyy|YYYY/g, year4)
@@ -575,8 +592,8 @@ function parseBillContent(content: string): BillInfo | null {
 
 /** 根据商户名自动匹配分类和描述 */
 function matchMerchantCategory(config: AccountingConfig, merchant: string): { keyword: string; description: string } {
-    const merchantMap: Record<string, { category: string; description?: string }> = config.billMerchantMap || {};
-    for (const [pattern, entry] of Object.entries(merchantMap)) {
+    const merchantMap: Record<string, MerchantMapEntry | string> = config.billMerchantMap || {};
+    for (const [pattern, entry] of recordEntries(merchantMap)) {
         if (!merchant.includes(pattern)) continue;
         if (typeof entry === 'string') {
             return { keyword: entry, description: '' };
@@ -1322,7 +1339,7 @@ class AccountingStorage {
             return null;
         }
         
-        const budgetStatus = {
+        const budgetStatus: BudgetStatus = {
             totalBudget: budgets.monthly.total,
             totalSpent: stats.totalExpense,
             totalRemaining: budgets.monthly.total - stats.totalExpense,
@@ -1344,7 +1361,7 @@ class AccountingStorage {
         }
         
         // 检查分类预算
-        Object.entries(budgets.monthly.categories).forEach(([keyword, budget]: [string, number]) => {
+        recordEntries(budgets.monthly.categories).forEach(([keyword, budget]) => {
             const categoryName = this.config.categories[keyword];
             if (!categoryName || budget <= 0) return;
             
@@ -1509,7 +1526,7 @@ class CategoryConfigModal extends Modal {
         
         // 添加分类选项
         const currentDefault = this.plugin.config.defaultCategory || 'cy';
-        Object.entries(this.categories).forEach(([keyword, categoryName]: [string, string]) => {
+        recordEntries(this.categories).forEach(([keyword, categoryName]) => {
             const optEl = defaultCategorySelect.createEl('option', {
                 value: keyword,
                 text: `${categoryName} (${keyword})`
@@ -1618,7 +1635,7 @@ class CategoryConfigModal extends Modal {
     renderBudgetList() {
         this.budgetList.empty();
 
-        Object.entries(this.categories).forEach(([keyword, categoryName]: [string, string]) => {
+        recordEntries(this.categories).forEach(([keyword, categoryName]) => {
             if (keyword === 'sr') return; // 跳过收入分类
             
             const item = this.budgetList.createDiv('budget-item');
@@ -1647,7 +1664,7 @@ class CategoryConfigModal extends Modal {
     renderCategoryList() {
         this.categoryList.empty();
 
-        Object.entries(this.categories).forEach(([keyword, category]: [string, string]) => {
+        recordEntries(this.categories).forEach(([keyword, category]) => {
             const item = this.categoryList.createDiv('category-item');
             
             const keywordInput = item.createEl('input', {
@@ -2129,7 +2146,7 @@ class ExportPDFModal extends Modal {
             // 计算总支出用于占比
             const totalForPercentage = totalExpense > 0 ? totalExpense : 1;
             
-            (Object.entries(this.stats.categoryStats) as [string, { total: number; count: number; records: AccountingRecord[] }][])
+            categoryStatEntries(this.stats.categoryStats)
                 .sort(([,a], [,b]) => b.total - a.total)
                 .forEach(([category, data]) => {
                     const row = tbody.createEl('tr');
@@ -2151,7 +2168,7 @@ class ExportPDFModal extends Modal {
         // 按日期分组
         const groupedRecords = this.groupRecordsByDate(this.records);
         
-        Object.entries(groupedRecords)
+        recordEntries(groupedRecords)
             .sort(([a], [b]) => new Date(b).getTime() - new Date(a).getTime())
             .forEach(([date, dayRecords]) => {
                 const dayGroup = recordsSection.createDiv('pdf-day-group');
@@ -2282,7 +2299,7 @@ class ExportPDFModal extends Modal {
         let categoryStatsHTML = '';
         if (Object.keys(this.stats.categoryStats).length > 0) {
             const totalForPercentage = totalExpense > 0 ? totalExpense : 1;
-            const categoryRows = (Object.entries(this.stats.categoryStats) as [string, { total: number; count: number; records: AccountingRecord[] }][])
+            const categoryRows = categoryStatEntries(this.stats.categoryStats)
                 .sort(([,a], [,b]) => b.total - a.total)
                 .map(([category, data]) => {
                     const isIncome = data.records.some(r => r.isIncome);
@@ -2417,7 +2434,7 @@ class QuickEntryModal extends Modal {
         const defaultCategory = this.plugin.config.defaultCategory || 'cy';
         
         // 创建分类按钮
-        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]: [string, string]) => {
+        recordEntries(this.plugin.config.categories).forEach(([keyword, categoryName]) => {
             const isIncome = keyword === 'sr';
             const btn = categoryGrid.createEl('button', {
                 text: categoryName,
@@ -2620,7 +2637,7 @@ class QuickCopyModal extends Modal {
         // 分类筛选
         const categorySelect = filterSection.createEl('select', { cls: 'quick-copy-category-select' });
         categorySelect.createEl('option', { text: '全部分类', value: '' });
-        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]: [string, string]) => {
+        recordEntries(this.plugin.config.categories).forEach(([keyword, categoryName]) => {
             categorySelect.createEl('option', { text: categoryName, value: keyword });
         });
         categorySelect.addEventListener('change', () => {
@@ -3006,7 +3023,7 @@ class BillImportModal extends Modal {
         const catRow = form.createDiv('bill-form-row');
         catRow.createEl('label', { text: '分类', cls: 'bill-form-label' });
         this.categorySelect = catRow.createEl('select', { cls: 'bill-form-select' });
-        Object.entries(this.plugin.config.categories).forEach(([kw, name]) => {
+        recordEntries(this.plugin.config.categories).forEach(([kw, name]) => {
             const opt = this.categorySelect.createEl('option', { text: `${name}（${kw}）`, value: kw });
             if (kw === this.keyword) opt.selected = true;
         });
@@ -3311,7 +3328,7 @@ class AccountingView extends ItemView {
         allBtn.onclick = () => this.applyCategoryFilter('', allBtn);
 
         // 各分类按钮
-        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]: [string, string]) => {
+        recordEntries(this.plugin.config.categories).forEach(([keyword, categoryName]) => {
             const btn = this.categoryFilterEl.createEl('button', {
                 text: categoryName,
                 cls: `category-filter-btn ${this.selectedCategory === keyword ? 'active' : ''}`
@@ -3661,7 +3678,7 @@ class AccountingView extends ItemView {
             
             const categoryList = categorySection.createDiv('category-list');
             
-            (Object.entries(categoryStats) as [string, { total: number; count: number; records: AccountingRecord[] }][])
+            categoryStatEntries(categoryStats)
                 .sort(([,a], [,b]) => b.total - a.total)
                 .forEach(([category, data]) => {
                     const item = categoryList.createDiv('category-item');
@@ -3729,7 +3746,7 @@ class AccountingView extends ItemView {
         // 按日期分组
         const groupedRecords = this.groupRecordsByDate(records);
         
-        Object.entries(groupedRecords)
+        recordEntries(groupedRecords)
             .sort(([a], [b]) => new Date(b).getTime() - new Date(a).getTime())
             .forEach(([date, dayRecords]) => {
                 this.renderDayRecords(recordsList, date, dayRecords);
@@ -3834,7 +3851,7 @@ class AccountingView extends ItemView {
             minWidth: `${anchorEl.offsetWidth}px`
         });
 
-        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]: [string, string]) => {
+        recordEntries(this.plugin.config.categories).forEach(([keyword, categoryName]) => {
             const option = dropdown.createDiv('coin-memo-category-option');
             option.setText(categoryName);
             if (keyword === record.keyword) {
@@ -3934,12 +3951,8 @@ class AccountingView extends ItemView {
         yesterday.setDate(yesterday.getDate() - 1);
         
         // 使用本地日期格式，避免 UTC 时区问题
-        const todayStr = today.getFullYear() + '-' + 
-            String(today.getMonth() + 1).padStart(2, '0') + '-' + 
-            String(today.getDate()).padStart(2, '0');
-        const yesterdayStr = yesterday.getFullYear() + '-' + 
-            String(yesterday.getMonth() + 1).padStart(2, '0') + '-' + 
-            String(yesterday.getDate()).padStart(2, '0');
+        const todayStr = formatLocalDate(today);
+        const yesterdayStr = formatLocalDate(yesterday);
         
         if (dateStr === todayStr) {
             return '今天';
@@ -4064,7 +4077,7 @@ class AccountingView extends ItemView {
             
             const totalForPercentage = totalExpense > 0 ? totalExpense : 1;
             
-            (Object.entries(categoryStats) as [string, { total: number; count: number; records: AccountingRecord[] }][])
+            categoryStatEntries(categoryStats)
                 .sort(([,a], [,b]) => b.total - a.total)
                 .forEach(([category, data]) => {
                     const isIncome = data.records.some(r => r.isIncome);
@@ -4648,7 +4661,7 @@ class AccountingSettingTab extends PluginSettingTab {
 
         const presetFormats = ['yyyy-MM-dd', 'yyyy年MM月dd日', 'yyyy/MM/dd', 'yyyyMMdd', 'DD-MM-YYYY', 'MM-dd-yyyy', 'yy.MM.dd', 'yy.MM.dd-星期', 'yy.MM.dd-周'];
         const currentFormat = this.plugin.config.dateFormat || 'yyyy-MM-dd';
-        const isPreset = presetFormats.includes(currentFormat);
+        const isPreset = presetFormats.some(fmt => fmt === currentFormat);
 
         let customInputSetting: Setting;
 
@@ -4737,9 +4750,9 @@ class AccountingSettingTab extends PluginSettingTab {
             cls: 'setting-item-description'
         });
 
-        const merchantMap: Record<string, { category: string; description?: string }> =
+        const merchantMap: Record<string, MerchantMapEntry> =
             this.plugin.config.billMerchantMap || {};
-        const merchantLines = Object.entries(merchantMap)
+        const merchantLines = recordEntries(merchantMap)
             .map(([k, v]) => v.description ? `${k}=${v.category}=${v.description}` : `${k}=${v.category}`)
             .join('\n');
 
@@ -4901,7 +4914,7 @@ class ReclassifyView extends ItemView {
         // 添加空占位选项
         const placeholderOpt = toSelect.createEl('option', { text: '请选择目标分类', value: '' });
         placeholderOpt.disabled = true;
-        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]: [string, string]) => {
+        recordEntries(this.plugin.config.categories).forEach(([keyword, categoryName]) => {
             const opt = toSelect.createEl('option', {
                 text: `${categoryName} (${keyword})`,
                 value: keyword
@@ -5074,7 +5087,7 @@ class ReclassifyView extends ItemView {
         const fromRow = section.createDiv('reclassify-batch-row');
         fromRow.createEl('label', { text: '源分类：', cls: 'reclassify-batch-label' });
         const fromContainer = section.createDiv('reclassify-batch-from-categories');
-        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]: [string, string]) => {
+        recordEntries(this.plugin.config.categories).forEach(([keyword, categoryName]) => {
             const label = fromContainer.createEl('label', { cls: 'reclassify-batch-category-pill' });
             const cb = label.createEl('input', { type: 'checkbox', value: keyword });
             label.appendText(` ${categoryName}`);
@@ -5096,7 +5109,7 @@ class ReclassifyView extends ItemView {
         const placeholderOpt = toSelect.createEl('option', { text: '请选择目标分类', value: '' });
         placeholderOpt.disabled = true;
         placeholderOpt.selected = true;
-        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]: [string, string]) => {
+        recordEntries(this.plugin.config.categories).forEach(([keyword, categoryName]) => {
             toSelect.createEl('option', { text: `${categoryName} (${keyword})`, value: keyword });
         });
         toSelect.onchange = () => { this.batchToKeyword = toSelect.value; };
