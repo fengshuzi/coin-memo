@@ -2661,3 +2661,34 @@ button.accounting-btn-primary:hover {
     backdrop-filter: blur(14px) saturate(140%);
     -webkit-backdrop-filter: blur(14px) saturate(140%);
 }
+
+/* 分类下拉选择菜单 */
+.coin-memo-category-dropdown {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    max-height: 240px;
+    overflow-y: auto;
+    padding: 4px 0;
+    min-width: 120px;
+}
+
+.coin-memo-category-option {
+    padding: 8px 14px;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text-normal);
+    transition: background 0.15s ease;
+    white-space: nowrap;
+}
+
+.coin-memo-category-option:hover {
+    background: var(--background-modifier-hover);
+}
+
+.coin-memo-category-option.active {
+    background: var(--background-modifier-success);
+    color: var(--text-on-accent);
+    font-weight: 600;
+}

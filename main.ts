@@ -3101,6 +3101,7 @@ class AccountingView extends ItemView {
     recordsContainer: HTMLElement;
     timeDisplay: HTMLElement;
     categoryFilterEl: HTMLElement;             // 分类筛选按钮容器
+    activeCategoryDropdown: HTMLElement | null; // 当前打开的分类下拉菜单
 
     constructor(leaf: WorkspaceLeaf, plugin: AccountingPlugin) {
         super(leaf);
@@ -3111,6 +3112,7 @@ class AccountingView extends ItemView {
         this.categoryFilteredRecords = [];
         this.currentDateRange = { start: '', end: '', label: '本月' };
         this.selectedCategory = '';
+        this.activeCategoryDropdown = null;
     }
 
     getViewType() {
@@ -3693,26 +3695,10 @@ class AccountingView extends ItemView {
             categoryLabel.style.setProperty('--cat-color', color);
             categoryLabel.textContent = record.category;
 
-            // 点击分类标签轮询切换分类
-            categoryLabel.onclick = async () => {
-                const catKeys = Object.keys(this.plugin.config.categories);
-                const curIdx = catKeys.indexOf(record.keyword);
-                const nextIdx = (curIdx + 1) % catKeys.length;
-                const nextKeyword = catKeys[nextIdx];
-
-                // 更新文件内容
-                const fileDate = isoToFileDate(record.fileDate, this.plugin.config.dateFormat);
-                const journalPath = `${this.plugin.config.journalsPath}/${fileDate}.md`;
-                const file = this.app.vault.getAbstractFileByPath(journalPath);
-                if (file instanceof TFile) {
-                    let content = await this.app.vault.read(file);
-                    const newLine = ReclassifyEngine.replaceKeyword(
-                        record.rawLine, record.keyword, nextKeyword, this.plugin.config.expenseEmoji
-                    );
-                    content = content.replace(record.rawLine, newLine);
-                    await this.app.vault.modify(file, content);
-                    await this.loadAllRecords();
-                }
+            // 点击分类标签弹出下拉选择分类
+            categoryLabel.onclick = (e) => {
+                e.stopPropagation();
+                this.showCategoryDropdown(categoryLabel, record);
             };
 
             // 显示描述，如果是补录则高亮日期
@@ -3744,6 +3730,83 @@ class AccountingView extends ItemView {
                 this.showRecordContextMenu(e, record);
             };
         });
+    }
+
+    /** 在指定元素下方显示分类下拉选择 */
+    showCategoryDropdown(anchorEl: HTMLElement, record: AccountingRecord) {
+        // 关闭已有下拉
+        this.closeCategoryDropdown();
+
+        const dropdown = document.createElement('div');
+        dropdown.addClass('coin-memo-category-dropdown');
+        dropdown.style.position = 'fixed';
+        dropdown.style.zIndex = '9999';
+        dropdown.style.minWidth = `${anchorEl.offsetWidth}px`;
+
+        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]) => {
+            const option = dropdown.createDiv('coin-memo-category-option');
+            option.setText(categoryName);
+            if (keyword === record.keyword) {
+                option.addClass('active');
+            }
+            option.onclick = async (e) => {
+                e.stopPropagation();
+                if (keyword === record.keyword) {
+                    this.closeCategoryDropdown();
+                    return;
+                }
+
+                const fileDate = isoToFileDate(record.fileDate, this.plugin.config.dateFormat);
+                const journalPath = `${this.plugin.config.journalsPath}/${fileDate}.md`;
+                const file = this.app.vault.getAbstractFileByPath(journalPath);
+                if (file instanceof TFile) {
+                    let content = await this.app.vault.read(file);
+                    const newLine = ReclassifyEngine.replaceKeyword(
+                        record.rawLine, record.keyword, keyword, this.plugin.config.expenseEmoji
+                    );
+                    content = content.replace(record.rawLine, newLine);
+                    await this.app.vault.modify(file, content);
+                    await this.loadAllRecords();
+                }
+                this.closeCategoryDropdown();
+            };
+        });
+
+        document.body.appendChild(dropdown);
+        this.activeCategoryDropdown = dropdown;
+
+        // 定位到 anchor 下方
+        const rect = anchorEl.getBoundingClientRect();
+        const dropdownRect = dropdown.getBoundingClientRect();
+        let left = rect.left;
+        let top = rect.bottom + 4;
+        if (left + dropdownRect.width > window.innerWidth) {
+            left = window.innerWidth - dropdownRect.width - 8;
+        }
+        if (top + dropdownRect.height > window.innerHeight) {
+            top = rect.top - dropdownRect.height - 4;
+        }
+        dropdown.style.left = `${left}px`;
+        dropdown.style.top = `${top}px`;
+
+        // 点击外部关闭
+        const closeOnClickOutside = (e: MouseEvent) => {
+            if (!dropdown.contains(e.target as Node)) {
+                this.closeCategoryDropdown();
+                document.removeEventListener('click', closeOnClickOutside);
+            }
+        };
+        // 延迟绑定，避免当前点击立即关闭
+        setTimeout(() => {
+            document.addEventListener('click', closeOnClickOutside);
+        }, 0);
+    }
+
+    closeCategoryDropdown() {
+        if (this.activeCategoryDropdown) {
+            this.activeCategoryDropdown.remove();
+            this.activeCategoryDropdown = null;
+        }
     }
 
     showRecordContextMenu(event: MouseEvent, record: AccountingRecord) {
