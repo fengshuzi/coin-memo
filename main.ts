@@ -3433,6 +3433,7 @@ class AccountingView extends ItemView {
                     ? base
                     : base.filter(r => r.keyword === this.selectedCategory);
 
+                this.updateTimeButtonState();
                 this.updateStatsDisplay();
                 this.updateRecordsDisplay(this.categoryFilteredRecords);
             } else {
@@ -3470,12 +3471,11 @@ class AccountingView extends ItemView {
         this.timeDisplay.removeClass('hidden');
         
         // 设置本月按钮为激活状态
-        window.setTimeout(() => {
-            const thisMonthBtn = this.contentEl.querySelector('.quick-time-btn[data-range="thisMonth"]');
-            if (thisMonthBtn) {
-                thisMonthBtn.classList.add('active');
-            }
-        }, 100);
+        const thisMonthBtn = this.contentEl.querySelector('.quick-time-btn[data-range="thisMonth"]');
+        if (thisMonthBtn) {
+            this.contentEl.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
+            thisMonthBtn.classList.add('active');
+        }
 
         // 时间变化时重置分类筛选
         this.selectedCategory = '';
@@ -3515,6 +3515,26 @@ class AccountingView extends ItemView {
                 this.updateRecordsDisplay(filteredRecords);
             }
         }).open();
+    }
+
+    /** 根据 currentDateRange 更新时间按钮激活状态 */
+    updateTimeButtonState() {
+        const rangeMap: Record<string, string> = {
+            '本月': 'thisMonth',
+            '上月': 'lastMonth',
+            '本周': 'thisWeek',
+            '上周': 'lastWeek'
+        };
+        const dataRange = rangeMap[this.currentDateRange.label];
+
+        this.contentEl.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
+
+        if (dataRange) {
+            const targetBtn = this.contentEl.querySelector(`.quick-time-btn[data-range="${dataRange}"]`);
+            if (targetBtn) {
+                targetBtn.classList.add('active');
+            }
+        }
     }
 
     // 获取分类颜色
