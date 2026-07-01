@@ -1344,7 +1344,7 @@ class AccountingStorage {
         }
         
         // 检查分类预算
-        Object.entries(budgets.monthly.categories).forEach(([keyword, budget]) => {
+        Object.entries(budgets.monthly.categories).forEach(([keyword, budget]: [string, number]) => {
             const categoryName = this.config.categories[keyword];
             if (!categoryName || budget <= 0) return;
             
@@ -1509,7 +1509,7 @@ class CategoryConfigModal extends Modal {
         
         // 添加分类选项
         const currentDefault = this.plugin.config.defaultCategory || 'cy';
-        Object.entries(this.categories).forEach(([keyword, categoryName]) => {
+        Object.entries(this.categories).forEach(([keyword, categoryName]: [string, string]) => {
             const optEl = defaultCategorySelect.createEl('option', {
                 value: keyword,
                 text: `${categoryName} (${keyword})`
@@ -1618,7 +1618,7 @@ class CategoryConfigModal extends Modal {
     renderBudgetList() {
         this.budgetList.empty();
 
-        Object.entries(this.categories).forEach(([keyword, categoryName]) => {
+        Object.entries(this.categories).forEach(([keyword, categoryName]: [string, string]) => {
             if (keyword === 'sr') return; // 跳过收入分类
             
             const item = this.budgetList.createDiv('budget-item');
@@ -1647,7 +1647,7 @@ class CategoryConfigModal extends Modal {
     renderCategoryList() {
         this.categoryList.empty();
 
-        Object.entries(this.categories).forEach(([keyword, category]) => {
+        Object.entries(this.categories).forEach(([keyword, category]: [string, string]) => {
             const item = this.categoryList.createDiv('category-item');
             
             const keywordInput = item.createEl('input', {
@@ -2129,7 +2129,7 @@ class ExportPDFModal extends Modal {
             // 计算总支出用于占比
             const totalForPercentage = totalExpense > 0 ? totalExpense : 1;
             
-            Object.entries(this.stats.categoryStats)
+            (Object.entries(this.stats.categoryStats) as [string, { total: number; count: number; records: AccountingRecord[] }][])
                 .sort(([,a], [,b]) => b.total - a.total)
                 .forEach(([category, data]) => {
                     const row = tbody.createEl('tr');
@@ -2282,7 +2282,7 @@ class ExportPDFModal extends Modal {
         let categoryStatsHTML = '';
         if (Object.keys(this.stats.categoryStats).length > 0) {
             const totalForPercentage = totalExpense > 0 ? totalExpense : 1;
-            const categoryRows = Object.entries(this.stats.categoryStats)
+            const categoryRows = (Object.entries(this.stats.categoryStats) as [string, { total: number; count: number; records: AccountingRecord[] }][])
                 .sort(([,a], [,b]) => b.total - a.total)
                 .map(([category, data]) => {
                     const isIncome = data.records.some(r => r.isIncome);
@@ -2417,7 +2417,7 @@ class QuickEntryModal extends Modal {
         const defaultCategory = this.plugin.config.defaultCategory || 'cy';
         
         // 创建分类按钮
-        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]) => {
+        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]: [string, string]) => {
             const isIncome = keyword === 'sr';
             const btn = categoryGrid.createEl('button', {
                 text: categoryName,
@@ -2620,7 +2620,7 @@ class QuickCopyModal extends Modal {
         // 分类筛选
         const categorySelect = filterSection.createEl('select', { cls: 'quick-copy-category-select' });
         categorySelect.createEl('option', { text: '全部分类', value: '' });
-        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]) => {
+        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]: [string, string]) => {
             categorySelect.createEl('option', { text: categoryName, value: keyword });
         });
         categorySelect.addEventListener('change', () => {
@@ -3311,7 +3311,7 @@ class AccountingView extends ItemView {
         allBtn.onclick = () => this.applyCategoryFilter('', allBtn);
 
         // 各分类按钮
-        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]) => {
+        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]: [string, string]) => {
             const btn = this.categoryFilterEl.createEl('button', {
                 text: categoryName,
                 cls: `category-filter-btn ${this.selectedCategory === keyword ? 'active' : ''}`
@@ -3661,7 +3661,7 @@ class AccountingView extends ItemView {
             
             const categoryList = categorySection.createDiv('category-list');
             
-            Object.entries(categoryStats)
+            (Object.entries(categoryStats) as [string, { total: number; count: number; records: AccountingRecord[] }][])
                 .sort(([,a], [,b]) => b.total - a.total)
                 .forEach(([category, data]) => {
                     const item = categoryList.createDiv('category-item');
@@ -3826,7 +3826,7 @@ class AccountingView extends ItemView {
         // 关闭已有下拉
         this.closeCategoryDropdown();
 
-        const dropdown = document.createElement('div');
+        const dropdown = activeDocument.createElement('div');
         dropdown.addClass('coin-memo-category-dropdown');
         dropdown.setCssStyles({
             position: 'fixed',
@@ -3834,7 +3834,7 @@ class AccountingView extends ItemView {
             minWidth: `${anchorEl.offsetWidth}px`
         });
 
-        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]) => {
+        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]: [string, string]) => {
             const option = dropdown.createDiv('coin-memo-category-option');
             option.setText(categoryName);
             if (keyword === record.keyword) {
@@ -3863,7 +3863,7 @@ class AccountingView extends ItemView {
             };
         });
 
-        document.body.appendChild(dropdown);
+        activeDocument.body.appendChild(dropdown);
         this.activeCategoryDropdown = dropdown;
 
         // 定位到 anchor 下方
@@ -3884,12 +3884,12 @@ class AccountingView extends ItemView {
         const closeOnClickOutside = (e: MouseEvent) => {
             if (!dropdown.contains(e.target as Node)) {
                 this.closeCategoryDropdown();
-                document.removeEventListener('click', closeOnClickOutside);
+                activeDocument.removeEventListener('click', closeOnClickOutside);
             }
         };
         // 延迟绑定，避免当前点击立即关闭
-        setTimeout(() => {
-            document.addEventListener('click', closeOnClickOutside);
+        window.setTimeout(() => {
+            activeDocument.addEventListener('click', closeOnClickOutside);
         }, 0);
     }
 
@@ -4064,7 +4064,7 @@ class AccountingView extends ItemView {
             
             const totalForPercentage = totalExpense > 0 ? totalExpense : 1;
             
-            Object.entries(categoryStats)
+            (Object.entries(categoryStats) as [string, { total: number; count: number; records: AccountingRecord[] }][])
                 .sort(([,a], [,b]) => b.total - a.total)
                 .forEach(([category, data]) => {
                     const isIncome = data.records.some(r => r.isIncome);
@@ -4843,7 +4843,7 @@ class ReclassifyView extends ItemView {
             let existingConfig: Record<string, unknown> = {};
             if (await adapter.exists(configPath)) {
                 const raw = await adapter.read(configPath);
-                existingConfig = JSON.parse(raw) as Record<string, unknown>;
+                existingConfig = JSON.parse(raw) as Partial<AccountingConfig>;
             }
 
             // 仅更新 reclassifyRules 字段，保留其他字段
@@ -4901,7 +4901,7 @@ class ReclassifyView extends ItemView {
         // 添加空占位选项
         const placeholderOpt = toSelect.createEl('option', { text: '请选择目标分类', value: '' });
         placeholderOpt.disabled = true;
-        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]) => {
+        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]: [string, string]) => {
             const opt = toSelect.createEl('option', {
                 text: `${categoryName} (${keyword})`,
                 value: keyword
@@ -5074,7 +5074,7 @@ class ReclassifyView extends ItemView {
         const fromRow = section.createDiv('reclassify-batch-row');
         fromRow.createEl('label', { text: '源分类：', cls: 'reclassify-batch-label' });
         const fromContainer = section.createDiv('reclassify-batch-from-categories');
-        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]) => {
+        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]: [string, string]) => {
             const label = fromContainer.createEl('label', { cls: 'reclassify-batch-category-pill' });
             const cb = label.createEl('input', { type: 'checkbox', value: keyword });
             label.appendText(` ${categoryName}`);
@@ -5096,7 +5096,7 @@ class ReclassifyView extends ItemView {
         const placeholderOpt = toSelect.createEl('option', { text: '请选择目标分类', value: '' });
         placeholderOpt.disabled = true;
         placeholderOpt.selected = true;
-        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]) => {
+        Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]: [string, string]) => {
             toSelect.createEl('option', { text: `${categoryName} (${keyword})`, value: keyword });
         });
         toSelect.onchange = () => { this.batchToKeyword = toSelect.value; };
