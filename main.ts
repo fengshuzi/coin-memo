@@ -4132,20 +4132,28 @@ export default class AccountingPlugin extends Plugin {
         try {
             const configPath = `${this.manifest.dir}/config.json`;
             const adapter = this.app.vault.adapter;
-            
+            const defaults = this.getDefaultConfig();
+
+            let loaded: Partial<AccountingConfig> = {};
             if (await adapter.exists(configPath)) {
                 const configContent = await adapter.read(configPath);
-                this.config = JSON.parse(configContent) as AccountingConfig;
-                // 优先从 Daily Notes 插件获取配置
-                const dailyNoteConfig = getDailyNoteConfig(this.app);
-                if (!this.config.journalsPath || typeof this.config.journalsPath !== 'string') {
-                    this.config.journalsPath = dailyNoteConfig?.folder || 'journals';
-                }
-                if (!this.config.dateFormat || typeof this.config.dateFormat !== 'string') {
-                    this.config.dateFormat = dailyNoteConfig?.format || 'yyyy-MM-dd';
-                }
-            } else {
-                this.config = this.getDefaultConfig();
+                loaded = JSON.parse(configContent) as Partial<AccountingConfig>;
+            }
+
+            // 以默认配置为基础合并用户配置，避免 reinstall/update 时新增字段或用户规则丢失
+            this.config = {
+                ...defaults,
+                ...loaded,
+                categories: { ...defaults.categories, ...(loaded.categories || {}) }
+            };
+
+            // 优先从 Daily Notes 插件获取配置
+            const dailyNoteConfig = getDailyNoteConfig(this.app);
+            if (!this.config.journalsPath || typeof this.config.journalsPath !== 'string') {
+                this.config.journalsPath = dailyNoteConfig?.folder || 'journals';
+            }
+            if (!this.config.dateFormat || typeof this.config.dateFormat !== 'string') {
+                this.config.dateFormat = dailyNoteConfig?.format || 'yyyy-MM-dd';
             }
         } catch (error) {
             console.error('加载配置失败:', error);
@@ -4173,11 +4181,13 @@ export default class AccountingPlugin extends Plugin {
         return {
             appName: "每日记账",
             categories: {
+                "sr": "收入",
                 "cy": "餐饮",
                 "jt": "交通出行",
                 "gw": "购物",
                 "dk": "贷款",
                 "jf": "生活缴费",
+                "yj": "悦己奖励",
                 "qt": "其他"
             },
             defaultCategory: "jt", // 默认分类为交通出行
@@ -4185,7 +4195,8 @@ export default class AccountingPlugin extends Plugin {
             journalsPath: "journals",
             dateFormat: "yyyy-MM-dd",
             enableQuickCopy: true, // 默认启用快速记账
-            quickCopyDays: 14 // 默认显示最近14天的记录
+            quickCopyDays: 14, // 默认显示最近14天的记录
+            reclassifyRules: [] // 默认无批量重分类规则
         };
     }
 
