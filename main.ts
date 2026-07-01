@@ -3828,9 +3828,11 @@ class AccountingView extends ItemView {
 
         const dropdown = document.createElement('div');
         dropdown.addClass('coin-memo-category-dropdown');
-        dropdown.style.position = 'fixed';
-        dropdown.style.zIndex = '9999';
-        dropdown.style.minWidth = `${anchorEl.offsetWidth}px`;
+        dropdown.setCssStyles({
+            position: 'fixed',
+            zIndex: '9999',
+            minWidth: `${anchorEl.offsetWidth}px`
+        });
 
         Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]) => {
             const option = dropdown.createDiv('coin-memo-category-option');
