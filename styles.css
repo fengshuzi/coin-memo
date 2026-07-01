@@ -2692,3 +2692,173 @@ button.accounting-btn-primary:hover {
     color: var(--text-on-accent);
     font-weight: 600;
 }
+
+/* ── 批量改分类面板 ── */
+.reclassify-batch-editor {
+    margin-bottom: 20px;
+    padding: 16px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 10px;
+    background: var(--background-primary);
+}
+
+.reclassify-batch-editor h3 {
+    margin: 0 0 14px 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-normal);
+}
+
+.reclassify-batch-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+}
+
+.reclassify-batch-label {
+    min-width: 72px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-muted);
+    padding-top: 6px;
+    flex-shrink: 0;
+}
+
+.reclassify-batch-time-buttons {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    flex: 1;
+}
+
+.reclassify-batch-time-btn {
+    padding: 6px 14px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 16px;
+    cursor: pointer;
+    color: var(--text-normal);
+    font-size: 13px;
+    font-weight: 500;
+    transition: all 0.15s ease;
+}
+
+.reclassify-batch-time-btn:hover {
+    background: var(--background-modifier-hover);
+}
+
+.reclassify-batch-time-btn.active {
+    background: var(--interactive-accent);
+    color: var(--text-on-accent);
+    border-color: var(--interactive-accent);
+}
+
+.reclassify-batch-custom-dates {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.reclassify-batch-custom-dates--hidden {
+    display: none;
+}
+
+.reclassify-batch-custom-dates label {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.reclassify-batch-custom-dates input[type="date"] {
+    padding: 5px 8px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    background: var(--background-primary);
+    color: var(--text-normal);
+    font-size: 13px;
+}
+
+.reclassify-batch-from-categories {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    flex: 1;
+}
+
+.reclassify-batch-category-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 12px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 16px;
+    cursor: pointer;
+    color: var(--text-normal);
+    font-size: 13px;
+    font-weight: 500;
+    transition: all 0.15s ease;
+}
+
+.reclassify-batch-category-pill:hover {
+    background: var(--background-modifier-hover);
+}
+
+.reclassify-batch-category-pill.active {
+    background: var(--interactive-accent);
+    color: var(--text-on-accent);
+    border-color: var(--interactive-accent);
+}
+
+.reclassify-batch-category-pill input[type="checkbox"] {
+    margin: 0;
+    cursor: pointer;
+}
+
+.reclassify-batch-to-select {
+    min-width: 160px;
+    padding: 6px 10px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    background: var(--background-primary);
+    color: var(--text-normal);
+    font-size: 13px;
+}
+
+.reclassify-batch-btn-row {
+    display: flex;
+    gap: 10px;
+    margin-top: 8px;
+    padding-left: 84px;
+}
+
+.reclassify-batch-preview-content {
+    margin-top: 12px;
+}
+
+@media (max-width: 640px) {
+    .reclassify-batch-row {
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .reclassify-batch-label {
+        padding-top: 0;
+    }
+
+    .reclassify-batch-btn-row {
+        padding-left: 0;
+    }
+}
+
+.theme-dark .reclassify-batch-editor {
+    background: var(--coin-glass-bg);
+    border-color: var(--coin-glass-border);
+    box-shadow:
+        inset 0 1px 0 var(--coin-glass-highlight),
+        0 10px 30px rgba(0, 0, 0, 0.32);
+    backdrop-filter: blur(16px) saturate(150%);
+    -webkit-backdrop-filter: blur(16px) saturate(150%);
+}

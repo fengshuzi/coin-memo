@@ -142,6 +142,8 @@ interface BatchCategoryPreview {
     fileCount: number;
 }
 
+type BatchTimeRange = 'all' | 'thisMonth' | 'lastMonth' | 'last6Months';
+
 // 视图类型常量
 const RECLASSIFY_VIEW = 'coin-memo-reclassify';
 
@@ -4793,7 +4795,8 @@ class ReclassifyView extends ItemView {
     endDate: string = '';
 
     // 批量改分类状态
-    batchDateEnabled: boolean = false;
+    batchTimeRange: 'all' | 'thisMonth' | 'lastMonth' | 'last6Months' = 'all';
+    batchCustomDateEnabled: boolean = false;
     batchStartDate: string = '';
     batchEndDate: string = '';
     batchFromKeywords: Set<string> = new Set();
@@ -5012,36 +5015,74 @@ class ReclassifyView extends ItemView {
         const section = container.createDiv('reclassify-batch-editor');
         section.createEl('h3', { text: '批量改分类' });
 
-        // 日期范围
-        const dateRow = section.createDiv('reclassify-batch-row');
-        const dateCb = dateRow.createEl('input', { type: 'checkbox' });
-        dateRow.createEl('label', { text: ' 启用日期范围' });
-        const dateInputs = section.createDiv('reclassify-batch-date-inputs reclassify-batch-date-inputs--hidden');
-        dateInputs.createEl('label', { text: '开始日期：' });
-        const startInput = dateInputs.createEl('input', { type: 'date' });
-        dateInputs.createEl('label', { text: '结束日期：' });
-        const endInput = dateInputs.createEl('input', { type: 'date' });
+        // 快捷时间选择
+        const timeRow = section.createDiv('reclassify-batch-row');
+        timeRow.createEl('label', { text: '时间范围：', cls: 'reclassify-batch-label' });
+        const timeButtons = timeRow.createDiv('reclassify-batch-time-buttons');
+        const timeRanges = [
+            { key: 'all', label: '全部' },
+            { key: 'thisMonth', label: '本月' },
+            { key: 'lastMonth', label: '上月' },
+            { key: 'last6Months', label: '最近六月' }
+        ];
+        let activeTimeBtn: HTMLElement | null = null;
+        const setActiveTimeBtn = (btn: HTMLElement) => {
+            if (activeTimeBtn) activeTimeBtn.removeClass('active');
+            btn.addClass('active');
+            activeTimeBtn = btn;
+        };
+        timeRanges.forEach(range => {
+            const btn = timeButtons.createEl('button', {
+                text: range.label,
+                cls: 'reclassify-batch-time-btn'
+            });
+            btn.onclick = () => {
+                this.batchTimeRange = range.key as BatchTimeRange;
+                this.applyBatchTimeRange();
+                setActiveTimeBtn(btn);
+            };
+            if (range.key === (this.batchTimeRange || 'all')) {
+                setActiveTimeBtn(btn);
+            }
+        });
 
-        dateCb.onchange = () => {
-            this.batchDateEnabled = dateCb.checked;
-            dateInputs.toggleClass('reclassify-batch-date-inputs--hidden', !dateCb.checked);
+        // 自定义日期范围
+        const customRow = section.createDiv('reclassify-batch-row');
+        const customCbLabel = customRow.createEl('label', { cls: 'reclassify-batch-checkbox' });
+        const customCb = customCbLabel.createEl('input', { type: 'checkbox' });
+        customCbLabel.appendText(' 自定义日期');
+        const customDates = customRow.createDiv('reclassify-batch-custom-dates reclassify-batch-custom-dates--hidden');
+        customDates.createEl('label', { text: '开始' });
+        const startInput = customDates.createEl('input', { type: 'date' });
+        customDates.createEl('label', { text: '结束' });
+        const endInput = customDates.createEl('input', { type: 'date' });
+
+        customCb.onchange = () => {
+            this.batchCustomDateEnabled = customCb.checked;
+            customDates.toggleClass('reclassify-batch-custom-dates--hidden', !customCb.checked);
+            if (customCb.checked && activeTimeBtn) {
+                activeTimeBtn.removeClass('active');
+                activeTimeBtn = null;
+            }
         };
         startInput.onchange = () => { this.batchStartDate = startInput.value; };
         endInput.onchange = () => { this.batchEndDate = endInput.value; };
 
         // 源分类多选
         const fromRow = section.createDiv('reclassify-batch-row');
-        fromRow.createEl('label', { text: '源分类（可多选）：', cls: 'reclassify-batch-label' });
+        fromRow.createEl('label', { text: '源分类：', cls: 'reclassify-batch-label' });
         const fromContainer = section.createDiv('reclassify-batch-from-categories');
         Object.entries(this.plugin.config.categories).forEach(([keyword, categoryName]) => {
-            const label = fromContainer.createEl('label', { cls: 'reclassify-batch-checkbox' });
+            const label = fromContainer.createEl('label', { cls: 'reclassify-batch-category-pill' });
             const cb = label.createEl('input', { type: 'checkbox', value: keyword });
             label.appendText(` ${categoryName}`);
             cb.onchange = () => {
                 if (cb.checked) {
                     this.batchFromKeywords.add(keyword);
+                    label.addClass('active');
                 } else {
                     this.batchFromKeywords.delete(keyword);
+                    label.removeClass('active');
                 }
             };
         });
@@ -5075,6 +5116,34 @@ class ReclassifyView extends ItemView {
 
         // 预览内容区
         this.batchPreviewEl = section.createDiv('reclassify-batch-preview-content');
+    }
+
+    /** 应用批量改分类的快捷时间范围 */
+    private applyBatchTimeRange(): void {
+        const now = new Date();
+        let startDate: Date;
+        let endDate: Date;
+
+        switch (this.batchTimeRange) {
+            case 'thisMonth':
+                startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+                endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+                break;
+            case 'lastMonth':
+                startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+                endDate = new Date(now.getFullYear(), now.getMonth(), 0);
+                break;
+            case 'last6Months':
+                startDate = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+                endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+                break;
+            default:
+                startDate = new Date(1970, 0, 1);
+                endDate = new Date(2099, 11, 31);
+        }
+
+        this.batchStartDate = formatLocalDate(startDate);
+        this.batchEndDate = formatLocalDate(endDate);
     }
 
     // 任务 10.1：渲染日期范围筛选区
@@ -5396,17 +5465,17 @@ class ReclassifyView extends ItemView {
 
         let startDate = this.batchStartDate;
         let endDate = this.batchEndDate;
-        if (this.batchDateEnabled) {
+        if (this.batchCustomDateEnabled) {
             const dateError = this.validateDateRange(startDate, endDate);
             if (dateError) {
                 this.batchPreviewEl.empty();
                 this.batchPreviewEl.createEl('p', { text: dateError, cls: 'reclassify-error-msg' });
                 return;
             }
-        } else {
-            // 未启用日期范围时默认所有时间
-            startDate = '1970-01-01';
-            endDate = '2099-12-31';
+        } else if (!startDate || !endDate) {
+            this.applyBatchTimeRange();
+            startDate = this.batchStartDate;
+            endDate = this.batchEndDate;
         }
 
         this.batchPreviewBtn.disabled = true;
