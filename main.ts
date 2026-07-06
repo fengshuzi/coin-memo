@@ -4790,7 +4790,12 @@ class AccountingSettingTab extends PluginSettingTab {
 
         const imgWrap = donateSection.createDiv({ cls: 'accounting-donate-qr' });
         const imgSrc = "https://raw.githubusercontent.com/fengshuzi/images/main/wechat-donate.jpg";
-        imgWrap.createEl('img', { attr: { src: imgSrc, alt: '微信打赏', width: '160' } });
+        const donateImg = imgWrap.createEl('img', { attr: { src: imgSrc, alt: '微信打赏' }, cls: 'plugin-donate-img' });
+        donateImg.addEventListener('click', () => {
+            const overlay = document.body.createDiv({ cls: 'plugin-donate-lightbox' });
+            overlay.createEl('img', { attr: { src: imgSrc, alt: '微信打赏' }, cls: 'plugin-donate-lightbox-img' });
+            overlay.addEventListener('click', () => overlay.remove());
+        });
         imgWrap.createEl('p', { text: '微信扫码', cls: 'accounting-donate-label' });
     }
 }

@@ -2280,8 +2280,12 @@ button.accounting-btn-primary:hover {
 }
 
 .accounting-donate-qr img {
+    width: 320px;
+    max-width: 100%;
+    height: auto;
     border-radius: 8px;
     display: block;
+    cursor: zoom-in;
 }
 
 .accounting-donate-label {
@@ -2861,4 +2865,22 @@ button.accounting-btn-primary:hover {
         0 10px 30px rgba(0, 0, 0, 0.32);
     backdrop-filter: blur(16px) saturate(150%);
     -webkit-backdrop-filter: blur(16px) saturate(150%);
+}
+
+.plugin-donate-lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(0, 0, 0, 0.82);
+    cursor: zoom-out;
+}
+.plugin-donate-lightbox-img {
+    max-width: 96vw;
+    max-height: 92vh;
+    border-radius: 12px;
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
 }
