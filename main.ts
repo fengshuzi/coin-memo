@@ -3155,6 +3155,128 @@ class BillImportModal extends Modal {
     }
 }
 
+// 统计视图
+const ACCOUNTING_STATS_VIEW = 'coin-memo-stats-view';
+
+// 分类颜色（主视图与统计视图共用）
+const CATEGORY_COLORS: Record<string, string> = {
+    '餐饮': '#dc3545',    // 红色
+    '交通': '#007bff',    // 蓝色
+    '娱乐': '#6f42c1',    // 紫色
+    '购物': '#fd7e14',    // 橙色
+    '医疗': '#20c997',    // 青色
+    '教育': '#198754',    // 绿色
+    '房租': '#6c757d',    // 灰色
+    '其他': '#495057',    // 深灰色
+    '收入': '#28a745',    // 成功绿色
+    '投资': '#17a2b8',    // 信息蓝色
+    '礼物': '#e83e8c',    // 粉色
+    '旅游': '#ffc107',    // 警告黄色
+    '运动': '#fd7e14'     // 橙色
+};
+
+function getCategoryColorShared(category: string): string {
+    return CATEGORY_COLORS[category] ?? '#6c757d'; // 默认灰色
+}
+
+/** 将总金额/预算卡片、预算告警、分类统计渲染到 container（主视图与统计视图共用） */
+function renderStatsInto(container: HTMLElement, stats: AccountingStats | null): void {
+    container.empty();
+
+    if (!stats) {
+        container.createDiv({ text: '暂无数据', cls: 'no-data' });
+        return;
+    }
+
+    const { totalIncome, totalExpense, categoryStats, budgetStatus } = stats;
+    const balance = totalIncome - totalExpense;
+
+    // 预算告警（如果有）
+    if (budgetStatus && budgetStatus.alerts.length > 0) {
+        const alertsContainer = container.createDiv('budget-alerts');
+        budgetStatus.alerts.forEach(alert => {
+            const alertItem = alertsContainer.createDiv(`budget-alert ${alert.type}`);
+            const icon = alert.type === 'exceeded' ? '⚠️' : '⚡';
+            alertItem.setText(`${icon} ${alert.message}`);
+        });
+    }
+
+    // 总览统计
+    const overview = container.createDiv('stats-overview');
+
+    const incomeCard = overview.createDiv('stat-card income');
+    incomeCard.createDiv({ text: '总收入', cls: 'stat-label' });
+    incomeCard.createDiv({ text: `¥${totalIncome.toFixed(2)}`, cls: 'stat-value' });
+
+    const expenseCard = overview.createDiv('stat-card expense');
+    expenseCard.createDiv({ text: '总支出', cls: 'stat-label' });
+    expenseCard.createDiv({ text: `¥${totalExpense.toFixed(2)}`, cls: 'stat-value' });
+
+    const balanceCard = overview.createDiv(`stat-card balance ${balance >= 0 ? 'positive' : 'negative'}`);
+    balanceCard.createDiv({ text: '结余', cls: 'stat-label' });
+    balanceCard.createDiv({ text: `¥${balance.toFixed(2)}`, cls: 'stat-value' });
+
+    // 预算状态卡片
+    if (budgetStatus && budgetStatus.totalBudget > 0) {
+        const budgetCard = overview.createDiv('stat-card budget');
+        budgetCard.createDiv({ text: '预算状态', cls: 'stat-label' });
+        const remaining = budgetStatus.totalRemaining;
+        const progressPercent = (budgetStatus.totalProgress * 100).toFixed(0);
+        budgetCard.createDiv({
+            text: remaining >= 0 ? `剩余 ¥${remaining.toFixed(2)}` : `超支 ¥${Math.abs(remaining).toFixed(2)}`,
+            cls: `stat-value ${remaining >= 0 ? 'positive' : 'negative'}`
+        });
+        budgetCard.createDiv({ text: `已用 ${progressPercent}%`, cls: 'stat-progress' });
+    }
+
+    // 分类统计
+    if (Object.keys(categoryStats).length > 0) {
+        const categorySection = container.createDiv('category-stats');
+        categorySection.createEl('h3', { text: '分类统计' });
+
+        const categoryList = categorySection.createDiv('category-list');
+
+        categoryStatEntries(categoryStats)
+            .sort(([,a], [,b]) => b.total - a.total)
+            .forEach(([category, data]) => {
+                const item = categoryList.createDiv('category-item');
+
+                const info = item.createDiv('category-info');
+
+                // 创建彩色标签
+                const categoryLabel = info.createDiv('category-label');
+                const color = getCategoryColorShared(category);
+                categoryLabel.style.setProperty('--cat-color', color);
+                categoryLabel.textContent = category;
+
+                const amountInfo = info.createDiv('category-amount-info');
+                amountInfo.createDiv({ text: `¥${data.total.toFixed(2)}`, cls: 'category-amount' });
+                amountInfo.createDiv({ text: `${data.count}笔`, cls: 'category-count' });
+
+                // 预算进度条（如果有预算设置）
+                if (budgetStatus && budgetStatus.categories[category]) {
+                    const budgetInfo = budgetStatus.categories[category];
+                    const progressBar = item.createDiv('budget-progress');
+                    const progressFill = progressBar.createDiv('budget-progress-fill');
+                    const progressPercent = Math.min(budgetInfo.progress * 100, 100);
+                    progressFill.style.setProperty('--progress-width', `${progressPercent}%`);
+
+                    // 根据进度设置颜色
+                    if (budgetInfo.progress >= 1) {
+                        progressFill.classList.add('exceeded');
+                    } else if (budgetInfo.progress >= 0.8) {
+                        progressFill.classList.add('warning');
+                    } else {
+                        progressFill.classList.add('normal');
+                    }
+
+                    const budgetText = item.createDiv('budget-text');
+                    budgetText.textContent = `预算: ¥${budgetInfo.budget} | 剩余: ¥${budgetInfo.remaining.toFixed(2)}`;
+                }
+            });
+    }
+}
+
 // 记账视图
 const ACCOUNTING_VIEW = 'accounting-view';
 
@@ -3166,7 +3288,6 @@ class AccountingView extends ItemView {
     categoryFilteredRecords: AccountingRecord[]; // 时间+分类筛选后的记录（用于展示）
     currentDateRange: { start: string; end: string; label: string };
     selectedCategory: string;                  // 当前选中的分类关键词，空字符串表示全部
-    statsContainer: HTMLElement;
     recordsContainer: HTMLElement;
     timeDisplay: HTMLElement;
     categoryFilterEl: HTMLElement;             // 分类筛选按钮容器
@@ -3212,7 +3333,6 @@ class AccountingView extends ItemView {
 
         this.renderHeader(container);
         this.renderFilters(container);
-        this.renderStats(container);
         this.renderRecordsList(container);
         
         // 初始加载数据
@@ -3269,6 +3389,9 @@ class AccountingView extends ItemView {
 
         const reclassifyBtn = actions.createEl('button', { text: '批量重分类', cls: 'accounting-btn' });
         reclassifyBtn.onclick = () => this.plugin.activateReclassifyView();
+
+        const statsBtn = actions.createEl('button', { text: '查看统计', cls: 'accounting-btn' });
+        statsBtn.onclick = () => { void this.plugin.activateStatsView(); };
     }
 
     renderFilters(container: HTMLElement) {
@@ -3422,7 +3545,6 @@ class AccountingView extends ItemView {
         this.categoryFilteredRecords = filteredRecords;
         if (this.categoryFilterEl) this.renderCategoryFilterButtons();
 
-        this.updateStatsDisplay();
         this.updateRecordsDisplay(filteredRecords);
     }
 
@@ -3449,7 +3571,6 @@ class AccountingView extends ItemView {
         // 清除按钮状态
         this.contentEl.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
 
-        this.updateStatsDisplay();
         this.updateRecordsDisplay();
     }
     
@@ -3472,11 +3593,6 @@ class AccountingView extends ItemView {
     // 格式化日期为 YYYY-MM-DD（使用本地时区）
     formatDate(date: Date): string {
         return formatLocalDate(date);
-    }
-
-    renderStats(container: HTMLElement) {
-        this.statsContainer = container.createDiv('accounting-stats');
-        this.updateStatsDisplay();
     }
 
     renderRecordsList(container: HTMLElement) {
@@ -3503,7 +3619,6 @@ class AccountingView extends ItemView {
                     : base.filter(r => r.keyword === this.selectedCategory);
 
                 this.updateTimeButtonState();
-                this.updateStatsDisplay();
                 this.updateRecordsDisplay(this.categoryFilteredRecords);
             } else {
                 // 默认显示本月数据
@@ -3551,7 +3666,6 @@ class AccountingView extends ItemView {
         this.categoryFilteredRecords = filteredRecords;
         if (this.categoryFilterEl) this.renderCategoryFilterButtons();
 
-        this.updateStatsDisplay();
         this.updateRecordsDisplay(filteredRecords);
     }
 
@@ -3580,8 +3694,7 @@ class AccountingView extends ItemView {
                 this.categoryFilteredRecords = filteredRecords;
                 if (this.categoryFilterEl) this.renderCategoryFilterButtons();
 
-                this.updateStatsDisplay();
-                this.updateRecordsDisplay(filteredRecords);
+                        this.updateRecordsDisplay(filteredRecords);
             }
         }).open();
     }
@@ -3624,110 +3737,6 @@ class AccountingView extends ItemView {
             '运动': '#fd7e14'     // 橙色
         };
         return colors[category] ?? '#6c757d'; // 默认灰色
-    }
-
-    updateStatsDisplay() {
-        
-        this.statsContainer.empty();
-        
-        if (!this.currentStats) {
-            this.statsContainer.createDiv({ text: '暂无数据', cls: 'no-data' });
-            return;
-        }
-
-        const { totalIncome, totalExpense, categoryStats, budgetStatus } = this.currentStats;
-        const balance = totalIncome - totalExpense;
-
-        // 预算告警（如果有）
-        if (budgetStatus && budgetStatus.alerts.length > 0) {
-            this.renderBudgetAlerts(budgetStatus.alerts);
-        }
-
-        // 总览统计
-        const overview = this.statsContainer.createDiv('stats-overview');
-        
-        const incomeCard = overview.createDiv('stat-card income');
-        incomeCard.createDiv({ text: '总收入', cls: 'stat-label' });
-        incomeCard.createDiv({ text: `¥${totalIncome.toFixed(2)}`, cls: 'stat-value' });
-
-        const expenseCard = overview.createDiv('stat-card expense');
-        expenseCard.createDiv({ text: '总支出', cls: 'stat-label' });
-        expenseCard.createDiv({ text: `¥${totalExpense.toFixed(2)}`, cls: 'stat-value' });
-
-        const balanceCard = overview.createDiv(`stat-card balance ${balance >= 0 ? 'positive' : 'negative'}`);
-        balanceCard.createDiv({ text: '结余', cls: 'stat-label' });
-        balanceCard.createDiv({ text: `¥${balance.toFixed(2)}`, cls: 'stat-value' });
-
-        // 预算状态卡片
-        if (budgetStatus && budgetStatus.totalBudget > 0) {
-            const budgetCard = overview.createDiv('stat-card budget');
-            budgetCard.createDiv({ text: '预算状态', cls: 'stat-label' });
-            const remaining = budgetStatus.totalRemaining;
-            const progressPercent = (budgetStatus.totalProgress * 100).toFixed(0);
-            budgetCard.createDiv({ 
-                text: remaining >= 0 ? `剩余 ¥${remaining.toFixed(2)}` : `超支 ¥${Math.abs(remaining).toFixed(2)}`,
-                cls: `stat-value ${remaining >= 0 ? 'positive' : 'negative'}`
-            });
-            budgetCard.createDiv({ text: `已用 ${progressPercent}%`, cls: 'stat-progress' });
-        }
-
-        // 分类统计
-        if (Object.keys(categoryStats).length > 0) {
-            const categorySection = this.statsContainer.createDiv('category-stats');
-            categorySection.createEl('h3', { text: '分类统计' });
-            
-            const categoryList = categorySection.createDiv('category-list');
-            
-            categoryStatEntries(categoryStats)
-                .sort(([,a], [,b]) => b.total - a.total)
-                .forEach(([category, data]) => {
-                    const item = categoryList.createDiv('category-item');
-                    
-                    const info = item.createDiv('category-info');
-                    
-                    // 创建彩色标签
-                    const categoryLabel = info.createDiv('category-label');
-                    const color = this.getCategoryColor(category);
-                    categoryLabel.style.setProperty('--cat-color', color);
-                    categoryLabel.textContent = category;
-                    
-                    const amountInfo = info.createDiv('category-amount-info');
-                    amountInfo.createDiv({ text: `¥${data.total.toFixed(2)}`, cls: 'category-amount' });
-                    amountInfo.createDiv({ text: `${data.count}笔`, cls: 'category-count' });
-                    
-                    // 预算进度条（如果有预算设置）
-                    if (budgetStatus && budgetStatus.categories[category]) {
-                        const budgetInfo = budgetStatus.categories[category];
-                        const progressBar = item.createDiv('budget-progress');
-                        const progressFill = progressBar.createDiv('budget-progress-fill');
-                        const progressPercent = Math.min(budgetInfo.progress * 100, 100);
-                        progressFill.style.setProperty('--progress-width', `${progressPercent}%`);
-                        
-                        // 根据进度设置颜色
-                        if (budgetInfo.progress >= 1) {
-                            progressFill.classList.add('exceeded');
-                        } else if (budgetInfo.progress >= 0.8) {
-                            progressFill.classList.add('warning');
-                        } else {
-                            progressFill.classList.add('normal');
-                        }
-                        
-                        const budgetText = item.createDiv('budget-text');
-                        budgetText.textContent = `预算: ¥${budgetInfo.budget} | 剩余: ¥${budgetInfo.remaining.toFixed(2)}`;
-                    }
-                });
-        }
-    }
-    
-    // 渲染预算告警
-    renderBudgetAlerts(alerts: BudgetStatus['alerts']) {
-        const alertsContainer = this.statsContainer.createDiv('budget-alerts');
-        
-        alerts.forEach(alert => {
-            const alertItem = alertsContainer.createDiv(`budget-alert ${alert.type}`);
-            const icon = alert.type === 'exceeded' ? '⚠️' : '⚡';
-            alertItem.setText(`${icon} ${alert.message}`);
-        });
     }
 
     updateRecordsDisplay(records = this.currentRecords) {
@@ -4152,6 +4161,7 @@ export default class AccountingPlugin extends Plugin {
 
         // 注册视图
         this.registerView(ACCOUNTING_VIEW, (leaf) => new AccountingView(leaf, this));
+        this.registerView(ACCOUNTING_STATS_VIEW, (leaf) => new AccountingStatsView(leaf, this));
         this.registerView(RECLASSIFY_VIEW, (leaf) => new ReclassifyView(leaf, this));
 
         // 添加功能区图标
@@ -4222,6 +4232,13 @@ export default class AccountingPlugin extends Plugin {
             id: 'reclassify',
             name: '批量重分类',
             callback: () => this.activateReclassifyView()
+        });
+
+        this.addCommand({
+            id: 'open-stats',
+            name: '打开记账统计',
+            icon: 'bar-chart-3',
+            callback: () => { void this.activateStatsView(); }
         });
 
         // 添加设置页面
@@ -4386,11 +4403,40 @@ export default class AccountingPlugin extends Plugin {
         workspace.setActiveLeaf(leaf, { focus: true });
     }
 
+    async activateStatsView() {
+        const { workspace } = this.app;
+
+        // 检查是否已有打开的统计视图
+        const existing = workspace.getLeavesOfType(ACCOUNTING_STATS_VIEW)[0];
+        if (existing) {
+            await workspace.revealLeaf(existing);
+            if (existing.view instanceof AccountingStatsView) {
+                await existing.view.loadStats(true);
+            }
+            return;
+        }
+
+        // 在新标签页打开
+        const leaf = workspace.getLeaf('tab');
+        await leaf.setViewState({
+            type: ACCOUNTING_STATS_VIEW,
+            active: true
+        });
+        await workspace.revealLeaf(leaf);
+    }
+
     async refreshData(preserveFilters = true) {
         const leaves = this.app.workspace.getLeavesOfType(ACCOUNTING_VIEW);
         for (const leaf of leaves) {
             if (leaf.view instanceof AccountingView) {
                 await leaf.view.loadAllRecords(false, preserveFilters);
+            }
+        }
+
+        const statsLeaves = this.app.workspace.getLeavesOfType(ACCOUNTING_STATS_VIEW);
+        for (const leaf of statsLeaves) {
+            if (leaf.view instanceof AccountingStatsView) {
+                await leaf.view.loadStats();
             }
         }
     }
@@ -4797,6 +4843,184 @@ class AccountingSettingTab extends PluginSettingTab {
             overlay.addEventListener('click', () => overlay.remove());
         });
         imgWrap.createEl('p', { text: '微信扫码', cls: 'accounting-donate-label' });
+    }
+}
+
+// ── 统计视图 ─────────────────────────────────────────────────────────────────
+
+class AccountingStatsView extends ItemView {
+    plugin: AccountingPlugin;
+    statsContainer: HTMLElement;
+    timeDisplay: HTMLElement;
+    currentDateRange: { start: string; end: string; label: string };
+
+    constructor(leaf: WorkspaceLeaf, plugin: AccountingPlugin) {
+        super(leaf);
+        this.plugin = plugin;
+        this.currentDateRange = { start: '', end: '', label: '本月' };
+    }
+
+    getViewType(): string {
+        return ACCOUNTING_STATS_VIEW;
+    }
+
+    getDisplayText(): string {
+        return '记账统计';
+    }
+
+    getIcon(): string {
+        return 'bar-chart-3';
+    }
+
+    async onOpen(): Promise<void> {
+        const container = this.containerEl.children[1];
+        container.empty();
+        container.addClass('accounting-view');
+
+        const header = container.createDiv('accounting-header');
+        header.createEl('h2', { text: '📊 记账统计', cls: 'accounting-title' });
+
+        const actions = header.createDiv('accounting-actions');
+        const refreshBtn = actions.createEl('button', {
+            text: '刷新数据',
+            cls: 'accounting-btn'
+        });
+        refreshBtn.onclick = () => { void this.loadStats(true); };
+
+        this.renderFilters(container);
+        this.statsContainer = container.createDiv('accounting-stats');
+        await this.loadStats();
+    }
+
+    renderFilters(container: HTMLElement): void {
+        const filters = container.createDiv('accounting-filters');
+
+        const timeSection = filters.createDiv('filter-section');
+        timeSection.createEl('label', { text: '时间筛选', cls: 'filter-label' });
+
+        const quickButtons = timeSection.createDiv('quick-time-buttons');
+
+        const timeRanges = [
+            { label: '本周', key: 'thisWeek' },
+            { label: '上周', key: 'lastWeek' },
+            { label: '本月', key: 'thisMonth' },
+            { label: '上月', key: 'lastMonth' },
+            { label: '自定义', key: 'custom' }
+        ];
+
+        timeRanges.forEach(range => {
+            const btn = quickButtons.createEl('button', {
+                text: range.label,
+                cls: 'quick-time-btn'
+            });
+            btn.setAttribute('data-range', range.key);
+            btn.onclick = () => { this.applyTimeRange(range.key, btn); };
+        });
+
+        this.timeDisplay = quickButtons.createDiv('current-time-display');
+        this.timeDisplay.addClass('hidden');
+    }
+
+    applyTimeRange(rangeKey: string, buttonEl: HTMLElement): void {
+        const now = new Date();
+        let startDate: Date;
+        let endDate: Date;
+        let displayText: string;
+
+        switch (rangeKey) {
+            case 'thisWeek': {
+                const day = now.getDay();
+                const diff = now.getDate() - day + (day === 0 ? -6 : 1);
+                startDate = new Date(now.setDate(diff));
+                endDate = new Date(now.setDate(diff + 6));
+                displayText = '本周';
+                break;
+            }
+            case 'lastWeek': {
+                const day = now.getDay();
+                const diff = now.getDate() - day + (day === 0 ? -6 : 1) - 7;
+                startDate = new Date(now.setDate(diff));
+                endDate = new Date(now.setDate(diff + 6));
+                displayText = '上周';
+                break;
+            }
+            case 'thisMonth':
+                startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+                endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+                displayText = '本月';
+                break;
+            case 'lastMonth':
+                startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+                endDate = new Date(now.getFullYear(), now.getMonth(), 0);
+                displayText = '上月';
+                break;
+            case 'custom':
+                this.showDateRangePicker();
+                return;
+            default:
+                return;
+        }
+
+        const startStr = formatLocalDate(startDate);
+        const endStr = formatLocalDate(endDate);
+        this.currentDateRange = { start: startStr, end: endStr, label: displayText };
+
+        this.timeDisplay.textContent = `${displayText} (${startStr} 至 ${endStr})`;
+        this.timeDisplay.removeClass('hidden');
+
+        this.contentEl.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
+        buttonEl.classList.add('active');
+
+        void this.loadStats();
+    }
+
+    showDateRangePicker(): void {
+        new DateRangeModal(this.app, {
+            onSelect: (startDate, endDate) => {
+                this.currentDateRange = { start: startDate, end: endDate, label: '自定义' };
+
+                this.timeDisplay.textContent = `自定义 (${startDate} 至 ${endDate})`;
+                this.timeDisplay.removeClass('hidden');
+
+                this.contentEl.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
+
+                void this.loadStats();
+            }
+        }).open();
+    }
+
+    async loadStats(forceRefresh = false): Promise<void> {
+        try {
+            const allRecords = await this.plugin.storage.getAllRecords(forceRefresh);
+            let records = allRecords;
+
+            // 默认按本月筛选；若用户已选择其他范围则按该范围
+            if (this.currentDateRange.start && this.currentDateRange.end) {
+                records = this.plugin.storage.filterRecordsByDateRange(
+                    allRecords, this.currentDateRange.start, this.currentDateRange.end
+                );
+            } else {
+                const now = new Date();
+                const startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+                const endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+                const startStr = formatLocalDate(startDate);
+                const endStr = formatLocalDate(endDate);
+                this.currentDateRange = { start: startStr, end: endStr, label: '本月' };
+                records = this.plugin.storage.filterRecordsByDateRange(allRecords, startStr, endStr);
+                this.timeDisplay.textContent = `本月 (${startStr} 至 ${endStr})`;
+                this.timeDisplay.removeClass('hidden');
+            }
+
+            const stats = this.plugin.storage.calculateStatistics(records);
+            renderStatsInto(this.statsContainer, stats);
+        } catch (error) {
+            console.error('加载统计数据失败:', error);
+            new Notice('加载统计数据失败');
+        }
+    }
+
+    onClose(): Promise<void> {
+        return Promise.resolve();
     }
 }
 
