@@ -1,4 +1,4 @@
-import { Plugin, ItemView, Modal, Notice, Menu, TFile, TAbstractFile, TFolder, PluginSettingTab, Setting, App, WorkspaceLeaf } from 'obsidian';
+import { Plugin, ItemView, Modal, Notice, Menu, TFile, TAbstractFile, TFolder, PluginSettingTab, Setting, App, WorkspaceLeaf, setIcon } from 'obsidian';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
 
@@ -3175,6 +3175,92 @@ const CATEGORY_COLORS: Record<string, string> = {
     '运动': '#fd7e14'     // 橙色
 };
 
+/** 轻量自定义下拉：点击向下展开选项，避免原生 select 弹层上下顶开 */
+class FilterDropdown {
+    private containerEl: HTMLElement;
+    private triggerEl: HTMLElement;
+    private menuEl: HTMLElement | null = null;
+    private options: Array<{ value: string; label: string }> = [];
+    private value: string = '';
+    private onChange: (value: string) => void;
+    private closeHandler: (e: MouseEvent) => void;
+
+    private triggerIcon: string | null = null;
+
+    constructor(parentEl: HTMLElement, onChange: (value: string) => void, triggerIcon: string | null = null) {
+        this.onChange = onChange;
+        this.triggerIcon = triggerIcon;
+        this.containerEl = parentEl.createDiv('filter-dropdown');
+        this.triggerEl = this.containerEl.createDiv('filter-dropdown-trigger');
+        this.triggerEl.onclick = (e) => {
+            e.stopPropagation();
+            this.toggleMenu();
+        };
+        this.closeHandler = (e: MouseEvent) => {
+            if (!this.containerEl.contains(e.target as Node)) {
+                this.closeMenu();
+            }
+        };
+        this.renderTrigger();
+    }
+
+    setOptions(options: Array<{ value: string; label: string }>): void {
+        this.options = options;
+        if (!options.some(o => o.value === this.value)) {
+            this.value = options[0]?.value ?? '';
+        }
+        this.renderTrigger();
+    }
+
+    setValue(value: string): void {
+        this.value = value;
+        this.renderTrigger();
+    }
+
+    getValue(): string {
+        return this.value;
+    }
+
+    private renderTrigger(): void {
+        this.triggerEl.empty();
+        if (this.triggerIcon) {
+            setIcon(this.triggerEl.createSpan('filter-dropdown-icon'), this.triggerIcon);
+        }
+        const current = this.options.find(o => o.value === this.value);
+        this.triggerEl.createSpan({ text: current?.label ?? '', cls: 'filter-dropdown-label' });
+        setIcon(this.triggerEl.createSpan('filter-dropdown-arrow'), 'chevron-down');
+    }
+
+    private toggleMenu(): void {
+        if (this.menuEl) {
+            this.closeMenu();
+        } else {
+            this.openMenu();
+        }
+    }
+
+    private openMenu(): void {
+        this.menuEl = this.containerEl.createDiv('filter-dropdown-menu');
+        this.options.forEach(opt => {
+            const item = this.menuEl!.createDiv(`filter-dropdown-item ${opt.value === this.value ? 'selected' : ''}`);
+            item.setText(opt.label);
+            item.onclick = (e) => {
+                e.stopPropagation();
+                this.setValue(opt.value);
+                this.closeMenu();
+                this.onChange(opt.value);
+            };
+        });
+        document.addEventListener('click', this.closeHandler);
+    }
+
+    private closeMenu(): void {
+        this.menuEl?.remove();
+        this.menuEl = null;
+        document.removeEventListener('click', this.closeHandler);
+    }
+}
+
 function getCategoryColorShared(category: string): string {
     return CATEGORY_COLORS[category] ?? '#6c757d'; // 默认灰色
 }
@@ -3290,7 +3376,8 @@ class AccountingView extends ItemView {
     selectedCategory: string;                  // 当前选中的分类关键词，空字符串表示全部
     recordsContainer: HTMLElement;
     timeDisplay: HTMLElement;
-    categoryFilterEl: HTMLElement;             // 分类筛选按钮容器
+    timeFilterEl: FilterDropdown;              // 时间筛选下拉
+    categoryFilterEl: FilterDropdown;          // 分类筛选下拉
     activeCategoryDropdown: HTMLElement | null; // 当前打开的分类下拉菜单
 
     constructor(leaf: WorkspaceLeaf, plugin: AccountingPlugin) {
@@ -3332,7 +3419,6 @@ class AccountingView extends ItemView {
         container.addClass('accounting-view');
 
         this.renderHeader(container);
-        this.renderFilters(container);
         this.renderRecordsList(container);
         
         // 初始加载数据
@@ -3346,129 +3432,94 @@ class AccountingView extends ItemView {
         const appName = this.plugin.config.appName || '每日记账';
         header.createEl('h2', { text: `💰 ${appName}`, cls: 'accounting-title' });
 
+        // 标题右侧：时间筛选 + 分类筛选 + 快捷操作
         const actions = header.createDiv('accounting-actions');
 
+        // 时间筛选下拉
+        actions.createEl('label', { text: '时间', cls: 'filter-label' });
+        this.timeFilterEl = new FilterDropdown(actions, (value) => this.applyTimeRange(value));
+        this.timeFilterEl.setOptions([
+            { value: 'thisWeek', label: '本周' },
+            { value: 'lastWeek', label: '上周' },
+            { value: 'thisMonth', label: '本月' },
+            { value: 'lastMonth', label: '上月' },
+            { value: 'custom', label: '自定义' }
+        ]);
+        this.timeFilterEl.setValue('thisMonth');
+
+        // 当前时间范围文字（内联，仅自定义时显示）
+        this.timeDisplay = actions.createDiv('current-time-display');
+        this.timeDisplay.addClass('hidden');
+
+        // 分类筛选下拉
+        actions.createEl('label', { text: '分类', cls: 'filter-label' });
+        this.categoryFilterEl = new FilterDropdown(actions, (value) => this.applyCategoryFilter(value));
+        this.renderCategoryFilterOptions();
+
+        // 快速记账/快速复制
         const quickEntryBtn = actions.createEl('button', {
             text: '快速记账',
             cls: 'accounting-btn accounting-btn-primary'
         });
         quickEntryBtn.onclick = () => this.showQuickEntryModal();
 
-        // 快速复制按钮（根据配置显示）
         if (this.plugin.config.enableQuickCopy !== false) {
             const quickCopyBtn = actions.createEl('button', {
                 text: '快速复制',
-                cls: 'accounting-btn accounting-btn-primary'
+                cls: 'accounting-btn'
             });
             quickCopyBtn.onclick = () => this.showQuickCopyModal();
         }
 
-        const refreshBtn = actions.createEl('button', {
-            text: '刷新数据',
-            cls: 'accounting-btn'
-        });
-        refreshBtn.onclick = () => this.loadAllRecords(true); // 强制刷新
+        const refreshBtn = actions.createDiv('filter-icon-btn');
+        refreshBtn.title = '刷新数据';
+        setIcon(refreshBtn, 'refresh-cw');
+        refreshBtn.onclick = () => { void this.loadAllRecords(true); };
 
-        const exportPDFBtn = actions.createEl('button', {
-            text: '导出 PDF',
-            cls: 'accounting-btn'
-        });
-        exportPDFBtn.onclick = () => this.showExportPDFModal();
-
-        const exportMDBtn = actions.createEl('button', {
-            text: '导出md',
-            cls: 'accounting-btn'
-        });
-        exportMDBtn.onclick = () => this.exportToMarkdown();
-
-        const configBtn = actions.createEl('button', {
-            text: '配置分类',
-            cls: 'accounting-btn'
-        });
-        configBtn.onclick = () => this.showConfigModal();
-
-        const reclassifyBtn = actions.createEl('button', { text: '批量重分类', cls: 'accounting-btn' });
-        reclassifyBtn.onclick = () => this.plugin.activateReclassifyView();
-
-        const statsBtn = actions.createEl('button', { text: '查看统计', cls: 'accounting-btn' });
-        statsBtn.onclick = () => { void this.plugin.activateStatsView(); };
+        const moreDropdown = new FilterDropdown(actions, (value) => {
+            switch (value) {
+                case 'stats':
+                    void this.plugin.activateStatsView();
+                    break;
+                case 'exportMd':
+                    this.exportToMarkdown();
+                    break;
+                case 'exportPdf':
+                    this.showExportPDFModal();
+                    break;
+                case 'config':
+                    this.showConfigModal();
+                    break;
+                case 'reclassify':
+                    void this.plugin.activateReclassifyView();
+                    break;
+            }
+            moreDropdown.setValue('');
+        }, 'more-horizontal');
+        moreDropdown.setOptions([
+            { value: '', label: '更多' },
+            { value: 'stats', label: '查看统计' },
+            { value: 'exportMd', label: '导出 Markdown' },
+            { value: 'exportPdf', label: '导出 PDF' },
+            { value: 'config', label: '配置分类' },
+            { value: 'reclassify', label: '批量重分类' }
+        ]);
+        moreDropdown.setValue('');
     }
 
-    renderFilters(container: HTMLElement) {
-        const filters = container.createDiv('accounting-filters');
-        
-        // 时间筛选区域
-        const timeSection = filters.createDiv('filter-section');
-        timeSection.createEl('label', { text: '时间筛选', cls: 'filter-label' });
-        
-        // 时间按钮 + 当前范围文字 + 重置，全部在同一 flex 行
-        const quickButtons = timeSection.createDiv('quick-time-buttons');
-        
-        const timeRanges = [
-            { label: '本周', key: 'thisWeek' },
-            { label: '上周', key: 'lastWeek' },
-            { label: '本月', key: 'thisMonth' },
-            { label: '上月', key: 'lastMonth' },
-            { label: '自定义', key: 'custom' }
-        ];
-        
-        timeRanges.forEach(range => {
-            const btn = quickButtons.createEl('button', {
-                text: range.label,
-                cls: 'quick-time-btn'
-            });
-            btn.setAttribute('data-range', range.key);
-            btn.onclick = () => this.applyTimeRange(range.key, btn);
-        });
-
-        // 当前时间范围文字（内联，紧跟按钮）
-        this.timeDisplay = quickButtons.createDiv('current-time-display');
-        this.timeDisplay.addClass('hidden');
-
-        // 重置按钮（文字链接风格，内联）
-        const clearBtn = quickButtons.createEl('button', {
-            text: '重置',
-            cls: 'clear-filter-btn'
-        });
-        clearBtn.onclick = () => this.resetToThisMonth();
-
-        // 分类筛选区域
-        const categorySection = filters.createDiv('filter-section');
-        categorySection.createEl('label', { text: '分类筛选', cls: 'filter-label' });
-        this.categoryFilterEl = categorySection.createDiv('category-filter-buttons');
-        this.renderCategoryFilterButtons();
-    }
-
-    /** 渲染分类筛选按钮（全部 + 各分类） */
-    renderCategoryFilterButtons() {
-        this.categoryFilterEl.empty();
-
-        // 「全部」按钮
-        const allBtn = this.categoryFilterEl.createEl('button', {
-            text: '全部',
-            cls: `category-filter-btn ${this.selectedCategory === '' ? 'active' : ''}`
-        });
-        allBtn.onclick = () => this.applyCategoryFilter('', allBtn);
-
-        // 各分类按钮
+    /** 渲染分类筛选下拉选项（全部 + 各分类） */
+    renderCategoryFilterOptions() {
+        const options = [{ value: '', label: '全部' }];
         recordEntries(this.plugin.config.categories).forEach(([keyword, categoryName]) => {
-            const btn = this.categoryFilterEl.createEl('button', {
-                text: categoryName,
-                cls: `category-filter-btn ${this.selectedCategory === keyword ? 'active' : ''}`
-            });
-            btn.onclick = () => this.applyCategoryFilter(keyword, btn);
+            options.push({ value: keyword, label: categoryName });
         });
+        this.categoryFilterEl.setOptions(options);
+        this.categoryFilterEl.setValue(this.selectedCategory);
     }
 
     /** 应用分类筛选，在当前时间筛选结果上再过滤 */
-    applyCategoryFilter(keyword: string, buttonEl: HTMLElement) {
+    applyCategoryFilter(keyword: string) {
         this.selectedCategory = keyword;
-
-        // 更新按钮激活状态
-        this.categoryFilterEl.querySelectorAll('.category-filter-btn').forEach(btn => {
-            btn.classList.remove('active');
-        });
-        buttonEl.classList.add('active');
 
         // 在时间筛选结果上叠加分类筛选
         const base = this.filteredRecords.length > 0 ? this.filteredRecords : this.currentRecords;
@@ -3478,9 +3529,9 @@ class AccountingView extends ItemView {
 
         this.updateRecordsDisplay(this.categoryFilteredRecords);
     }
-    
+
     // 应用时间范围筛选
-    applyTimeRange(rangeKey: string, buttonEl: HTMLElement) {
+    applyTimeRange(rangeKey: string) {
         const now = new Date();
         let startDate, endDate, displayText;
 
@@ -3532,48 +3583,17 @@ class AccountingView extends ItemView {
 
         this.currentStats = this.plugin.storage.calculateStatistics(filteredRecords);
 
-        // 更新显示
-        this.timeDisplay.textContent = `${displayText} (${startStr} 至 ${endStr})`;
-        this.timeDisplay.removeClass('hidden');
-
-        // 更新按钮状态
-        this.contentEl.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
-        buttonEl.classList.add('active');
+        // 预设范围不显示冗余日期文字（下拉已标明）
+        this.timeDisplay.addClass('hidden');
 
         // 时间变化时重置分类筛选
         this.selectedCategory = '';
         this.categoryFilteredRecords = filteredRecords;
-        if (this.categoryFilterEl) this.renderCategoryFilterButtons();
+        if (this.categoryFilterEl) this.renderCategoryFilterOptions();
 
         this.updateRecordsDisplay(filteredRecords);
     }
 
-    // 重置为本月
-    resetToThisMonth() {
-        // 清除所有按钮状态
-        this.contentEl.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
-
-        // 应用本月筛选
-        const thisMonthBtn = this.contentEl.querySelector('.quick-time-btn[data-range="thisMonth"]');
-        if (thisMonthBtn) {
-            this.applyTimeRange('thisMonth', thisMonthBtn);
-        } else {
-            // 如果找不到按钮，直接应用本月筛选
-            this.applyDefaultTimeRange();
-        }
-    }
-    
-    // 清除时间筛选（显示全部数据）
-    clearTimeFilter() {
-        this.currentStats = this.plugin.storage.calculateStatistics(this.currentRecords);
-        this.timeDisplay.addClass('hidden');
-        
-        // 清除按钮状态
-        this.contentEl.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
-
-        this.updateRecordsDisplay();
-    }
-    
     // 获取周开始日期（周一）
     getWeekStart(date: Date): Date {
         const d = new Date(date);
@@ -3650,21 +3670,15 @@ class AccountingView extends ItemView {
         
         this.currentStats = this.plugin.storage.calculateStatistics(filteredRecords);
         
-        // 更新显示
-        this.timeDisplay.textContent = `本月 (${startStr} 至 ${endStr})`;
-        this.timeDisplay.removeClass('hidden');
+        // 预设范围不显示冗余日期文字
+        this.timeDisplay.addClass('hidden');
         
-        // 设置本月按钮为激活状态
-        const thisMonthBtn = this.contentEl.querySelector('.quick-time-btn[data-range="thisMonth"]');
-        if (thisMonthBtn) {
-            this.contentEl.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
-            thisMonthBtn.classList.add('active');
-        }
+        if (this.timeFilterEl) this.timeFilterEl.setValue('thisMonth');
 
         // 时间变化时重置分类筛选
         this.selectedCategory = '';
         this.categoryFilteredRecords = filteredRecords;
-        if (this.categoryFilterEl) this.renderCategoryFilterButtons();
+        if (this.categoryFilterEl) this.renderCategoryFilterOptions();
 
         this.updateRecordsDisplay(filteredRecords);
     }
@@ -3682,40 +3696,34 @@ class AccountingView extends ItemView {
                 
                 this.currentStats = this.plugin.storage.calculateStatistics(filteredRecords);
                 
-                // 更新时间显示
-                this.timeDisplay.textContent = `自定义 (${startDate} 至 ${endDate})`;
+                // 自定义范围显示具体日期
+                this.timeDisplay.textContent = `${startDate} 至 ${endDate}`;
                 this.timeDisplay.removeClass('hidden');
-                
-                // 清除所有按钮的激活状态
-                this.contentEl.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
+
+                if (this.timeFilterEl) this.timeFilterEl.setValue('custom');
 
                 // 时间变化时重置分类筛选
                 this.selectedCategory = '';
                 this.categoryFilteredRecords = filteredRecords;
-                if (this.categoryFilterEl) this.renderCategoryFilterButtons();
+                if (this.categoryFilterEl) this.renderCategoryFilterOptions();
 
                         this.updateRecordsDisplay(filteredRecords);
             }
         }).open();
     }
 
-    /** 根据 currentDateRange 更新时间按钮激活状态 */
+    /** 根据 currentDateRange 同步时间筛选下拉选中值 */
     updateTimeButtonState() {
         const rangeMap: Record<string, string> = {
             '本月': 'thisMonth',
             '上月': 'lastMonth',
             '本周': 'thisWeek',
-            '上周': 'lastWeek'
+            '上周': 'lastWeek',
+            '自定义': 'custom'
         };
         const dataRange = rangeMap[this.currentDateRange.label];
-
-        this.contentEl.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
-
-        if (dataRange) {
-            const targetBtn = this.contentEl.querySelector(`.quick-time-btn[data-range="${dataRange}"]`);
-            if (targetBtn) {
-                targetBtn.classList.add('active');
-            }
+        if (this.timeFilterEl && dataRange) {
+            this.timeFilterEl.setValue(dataRange);
         }
     }
 
@@ -4894,34 +4902,24 @@ class AccountingStatsView extends ItemView {
 
     renderFilters(container: HTMLElement): void {
         const filters = container.createDiv('accounting-filters');
+        const row = filters.createDiv('filter-row');
 
-        const timeSection = filters.createDiv('filter-section');
-        timeSection.createEl('label', { text: '时间筛选', cls: 'filter-label' });
+        row.createEl('label', { text: '时间', cls: 'filter-label' });
+        const dropdown = new FilterDropdown(row, (value) => { this.applyTimeRange(value); });
+        dropdown.setOptions([
+            { value: 'thisWeek', label: '本周' },
+            { value: 'lastWeek', label: '上周' },
+            { value: 'thisMonth', label: '本月' },
+            { value: 'lastMonth', label: '上月' },
+            { value: 'custom', label: '自定义' }
+        ]);
+        dropdown.setValue('thisMonth');
 
-        const quickButtons = timeSection.createDiv('quick-time-buttons');
-
-        const timeRanges = [
-            { label: '本周', key: 'thisWeek' },
-            { label: '上周', key: 'lastWeek' },
-            { label: '本月', key: 'thisMonth' },
-            { label: '上月', key: 'lastMonth' },
-            { label: '自定义', key: 'custom' }
-        ];
-
-        timeRanges.forEach(range => {
-            const btn = quickButtons.createEl('button', {
-                text: range.label,
-                cls: 'quick-time-btn'
-            });
-            btn.setAttribute('data-range', range.key);
-            btn.onclick = () => { this.applyTimeRange(range.key, btn); };
-        });
-
-        this.timeDisplay = quickButtons.createDiv('current-time-display');
+        this.timeDisplay = row.createDiv('current-time-display');
         this.timeDisplay.addClass('hidden');
     }
 
-    applyTimeRange(rangeKey: string, buttonEl: HTMLElement): void {
+    applyTimeRange(rangeKey: string): void {
         const now = new Date();
         let startDate: Date;
         let endDate: Date;
@@ -4965,11 +4963,7 @@ class AccountingStatsView extends ItemView {
         const endStr = formatLocalDate(endDate);
         this.currentDateRange = { start: startStr, end: endStr, label: displayText };
 
-        this.timeDisplay.textContent = `${displayText} (${startStr} 至 ${endStr})`;
-        this.timeDisplay.removeClass('hidden');
-
-        this.contentEl.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
-        buttonEl.classList.add('active');
+        this.timeDisplay.addClass('hidden');
 
         void this.loadStats();
     }
@@ -4979,10 +4973,8 @@ class AccountingStatsView extends ItemView {
             onSelect: (startDate, endDate) => {
                 this.currentDateRange = { start: startDate, end: endDate, label: '自定义' };
 
-                this.timeDisplay.textContent = `自定义 (${startDate} 至 ${endDate})`;
+                this.timeDisplay.textContent = `${startDate} 至 ${endDate}`;
                 this.timeDisplay.removeClass('hidden');
-
-                this.contentEl.querySelectorAll('.quick-time-btn').forEach(btn => btn.classList.remove('active'));
 
                 void this.loadStats();
             }
@@ -5007,8 +4999,7 @@ class AccountingStatsView extends ItemView {
                 const endStr = formatLocalDate(endDate);
                 this.currentDateRange = { start: startStr, end: endStr, label: '本月' };
                 records = this.plugin.storage.filterRecordsByDateRange(allRecords, startStr, endStr);
-                this.timeDisplay.textContent = `本月 (${startStr} 至 ${endStr})`;
-                this.timeDisplay.removeClass('hidden');
+                this.timeDisplay.addClass('hidden');
             }
 
             const stats = this.plugin.storage.calculateStatistics(records);
