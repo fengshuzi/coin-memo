@@ -1,4 +1,4 @@
-import { Plugin, ItemView, Modal, Notice, Menu, TFile, TAbstractFile, TFolder, PluginSettingTab, Setting, App, WorkspaceLeaf, setIcon, SettingDefinitionItem } from 'obsidian';
+import { Plugin, ItemView, Modal, Notice, Menu, TFile, TAbstractFile, TFolder, PluginSettingTab, Setting, App, WorkspaceLeaf, setIcon } from 'obsidian';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
 
@@ -156,9 +156,9 @@ function pad2(value: number): string {
     return value < 10 ? `0${value}` : String(value);
 }
 
-/** 类型安全的 Object.entries（ES6 lib 下用 Object.keys 实现，避免 unsafe 告警） */
+/** 类型安全的 Object.entries */
 function recordEntries<K extends string, V>(record: Record<K, V>): Array<[K, V]> {
-    return Object.keys(record).map((key): [K, V] => [key as K, record[key as K]]);
+    return Object.entries(record) as Array<[K, V]>;
 }
 
 function categoryStatEntries(stats: Record<string, CategoryStatEntry>): Array<[string, CategoryStatEntry]> {
@@ -2224,10 +2224,14 @@ class ExportPDFModal extends Modal {
 
             // 创建一个临时容器用于渲染 PDF 内容
             const ownerDoc = this.contentEl.ownerDocument;
-            const tempContainer = ownerDoc.body.createDiv('pdf-temp-container');
+            const tempContainer = ownerDoc.createElement('div');
+            tempContainer.addClass('pdf-temp-container');
             const parser = new DOMParser();
             const parsedDoc = parser.parseFromString(this.generatePDFHTML(), 'text/html');
-            parsedDoc.body.childNodes.forEach(node => tempContainer.appendChild(node.cloneNode(true)));
+            const fragment = ownerDoc.createDocumentFragment();
+            parsedDoc.body.childNodes.forEach(node => fragment.appendChild(node.cloneNode(true)));
+            tempContainer.appendChild(fragment);
+            ownerDoc.body.appendChild(tempContainer);
 
             // 等待渲染完成
             await new Promise(resolve => window.setTimeout(resolve, 100));
@@ -3908,7 +3912,8 @@ class AccountingView extends ItemView {
         // 关闭已有下拉
         this.closeCategoryDropdown();
 
-        const dropdown = activeDocument.body.createDiv('coin-memo-category-dropdown');
+        const dropdown = activeDocument.createElement('div');
+        dropdown.addClass('coin-memo-category-dropdown');
         dropdown.setCssStyles({
             position: 'fixed',
             zIndex: '9999',
@@ -3944,6 +3949,7 @@ class AccountingView extends ItemView {
             };
         });
 
+        activeDocument.body.appendChild(dropdown);
         this.activeCategoryDropdown = dropdown;
 
         // 定位到 anchor 下方
@@ -4699,245 +4705,12 @@ export default class AccountingPlugin extends Plugin {
 }
 
 // 设置页面
-// 日记文件命名格式预设（设置页 display 与声明式 API 共用）
-const DATE_FORMAT_PRESETS = ['yyyy-MM-dd', 'yyyy年MM月dd日', 'yyyy/MM/dd', 'yyyyMMdd', 'DD-MM-YYYY', 'MM-dd-yyyy', 'yy.MM.dd', 'yy.MM.dd-星期', 'yy.MM.dd-周'];
-
-/** 商户映射序列化为每行 商户关键字=分类关键词=描述 */
-function serializeMerchantMap(map: Record<string, MerchantMapEntry>): string {
-    return recordEntries(map)
-        .map(([k, v]) => v.description ? `${k}=${v.category}=${v.description}` : `${k}=${v.category}`)
-        .join('\n');
-}
-
-/** 解析每行 商户关键字=分类关键词=描述 的商户映射文本 */
-function parseMerchantMapText(value: string): Record<string, MerchantMapEntry> {
-    const map: Record<string, MerchantMapEntry> = {};
-    value.split('\n').forEach(line => {
-        const trimmed = line.trim();
-        if (!trimmed || !trimmed.includes('=')) return;
-        const parts = trimmed.split('=');
-        const merchantKey = parts[0].trim();
-        const category = parts[1]?.trim();
-        const description = parts.slice(2).join('=').trim(); // 描述可含=
-        if (merchantKey && category) {
-            map[merchantKey] = description ? { category, description } : { category };
-        }
-    });
-    return map;
-}
-
 class AccountingSettingTab extends PluginSettingTab {
     plugin: AccountingPlugin;
-    customFormatSelected = false; // 用户在命名格式下拉中选择了“自定义...”（声明式渲染用）
 
     constructor(app: App, plugin: AccountingPlugin) {
         super(app, plugin);
         this.plugin = plugin;
-    }
-
-    /** 声明式设置：读取控件当前值（Obsidian 1.13.0+） */
-    getControlValue(key: string): unknown {
-        const config = this.plugin.config;
-        switch (key) {
-            case 'journalsPath':
-                return config.journalsPath || 'journals';
-            case 'enableQuickCopy':
-                return config.enableQuickCopy !== false;
-            case 'showMainPageStats':
-                return config.showMainPageStats === true;
-            case 'quickCopyDays':
-                return String(config.quickCopyDays || 14);
-            case 'dateFormat': {
-                if (this.customFormatSelected) return '__custom__';
-                const current = config.dateFormat || 'yyyy-MM-dd';
-                return DATE_FORMAT_PRESETS.indexOf(current) >= 0 ? current : '__custom__';
-            }
-            case 'customDateFormat': {
-                const current = config.dateFormat || '';
-                return DATE_FORMAT_PRESETS.indexOf(current) >= 0 ? '' : current;
-            }
-            case 'silentBillImport':
-                return config.silentBillImport === true;
-            case 'billMerchantMap':
-                return serializeMerchantMap(config.billMerchantMap || {});
-            default:
-                return undefined;
-        }
-    }
-
-    /** 声明式设置：持久化控件新值（Obsidian 1.13.0+） */
-    async setControlValue(key: string, value: unknown): Promise<void> {
-        const config = this.plugin.config;
-        switch (key) {
-            case 'journalsPath': {
-                const normalizedPath = (String(value ?? '') || 'journals').trim().replace(/^\/+/, '').replace(/\/+$/, '');
-                config.journalsPath = normalizedPath || 'journals';
-                await this.plugin.saveConfig();
-                if (this.plugin.storage) {
-                    this.plugin.storage.clearCache();
-                    await this.plugin.refreshData();
-                }
-                break;
-            }
-            case 'enableQuickCopy':
-                config.enableQuickCopy = value === true;
-                await this.plugin.saveConfig();
-                await this.plugin.refreshData();
-                break;
-            case 'showMainPageStats':
-                config.showMainPageStats = value === true;
-                await this.plugin.saveConfig();
-                await this.plugin.refreshData();
-                break;
-            case 'quickCopyDays': {
-                const days = parseInt(String(value ?? '')) || 14;
-                config.quickCopyDays = Math.max(1, Math.min(365, days));
-                await this.plugin.saveConfig();
-                break;
-            }
-            case 'dateFormat': {
-                const format = String(value ?? '');
-                if (format === '__custom__') {
-                    this.customFormatSelected = true;
-                    this.refreshDomState();
-                    break;
-                }
-                this.customFormatSelected = false;
-                config.dateFormat = format;
-                await this.plugin.saveConfig();
-                if (this.plugin.storage) {
-                    this.plugin.storage.clearCache();
-                    await this.plugin.refreshData();
-                }
-                this.refreshDomState();
-                break;
-            }
-            case 'customDateFormat': {
-                const trimmed = String(value ?? '').trim();
-                if (trimmed) {
-                    config.dateFormat = trimmed;
-                    await this.plugin.saveConfig();
-                    if (this.plugin.storage) {
-                        this.plugin.storage.clearCache();
-                        await this.plugin.refreshData();
-                    }
-                }
-                break;
-            }
-            case 'silentBillImport':
-                config.silentBillImport = value === true;
-                await this.plugin.saveConfig();
-                break;
-            case 'billMerchantMap':
-                config.billMerchantMap = parseMerchantMapText(String(value ?? ''));
-                await this.plugin.saveConfig();
-                break;
-            default:
-                break;
-        }
-    }
-
-    /** 声明式设置定义（Obsidian 1.13.0+；旧版本走 display() 回退） */
-    getSettingDefinitions(): SettingDefinitionItem[] {
-        const dailyNoteConfig = getDailyNoteConfig(this.app);
-        const journalsDesc = dailyNoteConfig?.folder
-            ? `检测到日记插件文件夹: ${dailyNoteConfig.folder}，已自动应用。可在此改为单独路径。`
-            : '日记文件存放的文件夹路径（相对 vault 根目录），默认为 journals';
-
-        const detectedFormat = dailyNoteConfig?.format;
-        const tipParts = ['修改后会自动保存并刷新数据。'];
-        if (detectedFormat) {
-            tipParts.push(`检测到日记插件格式: ${detectedFormat}，已自动应用。可在此改为单独格式。`);
-        } else {
-            tipParts.push('日记文件应存放在此文件夹下，格式默认为 yyyy-mm-dd.md。');
-        }
-
-        const formatOptions: Record<string, string> = {};
-        DATE_FORMAT_PRESETS.forEach(fmt => { formatOptions[fmt] = fmt; });
-        formatOptions['__custom__'] = '自定义...';
-
-        return [
-            {
-                type: 'group',
-                heading: '记账管理插件设置',
-                items: [
-                    {
-                        name: '日记文件夹路径',
-                        desc: journalsDesc,
-                        control: { type: 'text', key: 'journalsPath', placeholder: 'Journals' }
-                    },
-                    {
-                        name: '启用快速记账',
-                        desc: '在侧边栏显示"快速记账"按钮，记账视图中显示"快速复制"按钮，可快速复制最近n天的记账记录到今天',
-                        control: { type: 'toggle', key: 'enableQuickCopy' }
-                    },
-                    {
-                        name: '在主页面显示支出统计',
-                        desc: '开启后，记账主页面顶部以简单表格显示当前时间范围的总支出和各分类支出（默认隐藏，完整统计请打开统计页面）',
-                        control: { type: 'toggle', key: 'showMainPageStats' }
-                    },
-                    {
-                        name: '快速记账天数',
-                        desc: '快速记账显示最近n天的记录（默认14天）',
-                        control: { type: 'text', key: 'quickCopyDays', placeholder: '14' }
-                    },
-                    {
-                        name: '日记文件命名格式',
-                        desc: '日记文件的日期命名格式。修改后已有的日记文件需要对应重命名。',
-                        control: { type: 'dropdown', key: 'dateFormat', options: formatOptions }
-                    },
-                    {
-                        name: '自定义日期格式',
-                        desc: 'Token 规则：yyyy/YYYY=四位年, yy/YY=两位年(26), MM=月, dd/DD=日, 星期/星期X=中文星期长格式(星期五), 周/周X=短格式(周五)',
-                        visible: () => this.customFormatSelected || DATE_FORMAT_PRESETS.indexOf(this.plugin.config.dateFormat || 'yyyy-MM-dd') < 0,
-                        control: { type: 'text', key: 'customDateFormat', placeholder: '如: yyyy-MM-dd' }
-                    },
-                    {
-                        name: '💡 提示',
-                        desc: tipParts.join(''),
-                        searchable: false
-                    }
-                ]
-            },
-            {
-                type: 'group',
-                heading: '账单导入 - 商户自动分类',
-                items: [
-                    {
-                        name: '静默记账',
-                        desc: '开启后，截图账单识别成功时不弹确认框，直接写入今日日记。适合快捷指令自动化场景。',
-                        control: { type: 'toggle', key: 'silentBillImport' }
-                    },
-                    {
-                        name: '商户分类映射',
-                        desc: '每行一条，格式：商户关键字=分类关键词=描述（描述可省略，留空时记账描述也为空）。执行「从账单导入记账」命令时，自动根据识别到的商户名匹配分类和描述。示例：豆磨坊=cy=买豆腐',
-                        control: { type: 'textarea', key: 'billMerchantMap', placeholder: '豆磨坊=cy=买豆腐\n麦当劳=cy=麦当劳\n盒马=gw', rows: 8 }
-                    }
-                ]
-            },
-            {
-                type: 'group',
-                heading: '☕ 请作者喝杯咖啡',
-                items: [
-                    {
-                        name: '微信打赏',
-                        desc: '如果这个插件帮助了你，欢迎请作者喝杯咖啡 ☕',
-                        searchable: false,
-                        render: (setting) => {
-                            const imgWrap = setting.controlEl.createDiv({ cls: 'accounting-donate-qr' });
-                            const imgSrc = "https://raw.githubusercontent.com/fengshuzi/images/main/wechat-donate.jpg";
-                            const donateImg = imgWrap.createEl('img', { attr: { src: imgSrc, alt: '微信打赏' }, cls: 'plugin-donate-img' });
-                            donateImg.addEventListener('click', () => {
-                                const overlay = activeDocument.body.createDiv({ cls: 'plugin-donate-lightbox' });
-                                overlay.createEl('img', { attr: { src: imgSrc, alt: '微信打赏' }, cls: 'plugin-donate-lightbox-img' });
-                                overlay.addEventListener('click', () => overlay.remove());
-                            });
-                            imgWrap.createEl('p', { text: '微信扫码', cls: 'accounting-donate-label' });
-                        }
-                    }
-                ]
-            }
-        ];
     }
 
     display(): void {
@@ -5004,7 +4777,7 @@ class AccountingSettingTab extends PluginSettingTab {
                     await this.plugin.saveConfig();
                 }));
 
-        const presetFormats = DATE_FORMAT_PRESETS;
+        const presetFormats = ['yyyy-MM-dd', 'yyyy年MM月dd日', 'yyyy/MM/dd', 'yyyyMMdd', 'DD-MM-YYYY', 'MM-dd-yyyy', 'yy.MM.dd', 'yy.MM.dd-星期', 'yy.MM.dd-周'];
         const currentFormat = this.plugin.config.dateFormat || 'yyyy-MM-dd';
         const isPreset = presetFormats.some(fmt => fmt === currentFormat);
 
@@ -5095,7 +4868,11 @@ class AccountingSettingTab extends PluginSettingTab {
             cls: 'setting-item-description'
         });
 
-        const merchantLines = serializeMerchantMap(this.plugin.config.billMerchantMap || {});
+        const merchantMap: Record<string, MerchantMapEntry> =
+            this.plugin.config.billMerchantMap || {};
+        const merchantLines = recordEntries(merchantMap)
+            .map(([k, v]) => v.description ? `${k}=${v.category}=${v.description}` : `${k}=${v.category}`)
+            .join('\n');
 
         new Setting(containerEl)
             .setName('商户分类映射')
@@ -5106,7 +4883,19 @@ class AccountingSettingTab extends PluginSettingTab {
                 ta.inputEl.rows = 8;
                 ta.inputEl.addClass('merchant-textarea');
                 ta.onChange(async (value) => {
-                    this.plugin.config.billMerchantMap = parseMerchantMapText(value);
+                    const map: Record<string, { category: string; description?: string }> = {};
+                    value.split('\n').forEach(line => {
+                        const trimmed = line.trim();
+                        if (!trimmed || !trimmed.includes('=')) return;
+                        const parts = trimmed.split('=');
+                        const merchantKey = parts[0].trim();
+                        const category = parts[1]?.trim();
+                        const description = parts.slice(2).join('=').trim(); // 描述可含=
+                        if (merchantKey && category) {
+                            map[merchantKey] = description ? { category, description } : { category };
+                        }
+                    });
+                    this.plugin.config.billMerchantMap = map;
                     await this.plugin.saveConfig();
                 });
             });
