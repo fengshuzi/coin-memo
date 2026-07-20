@@ -494,6 +494,52 @@
     font-weight: 500;
 }
 
+/* 主页面简化支出统计表格 */
+.main-page-stats {
+    margin-top: 16px;
+}
+
+.main-page-stats.hidden {
+    display: none;
+}
+
+.main-stats-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--background-primary);
+}
+
+.main-stats-table th,
+.main-stats-table td {
+    padding: 6px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.main-stats-table th:last-child,
+.main-stats-table td:last-child {
+    text-align: right;
+}
+
+.main-stats-table thead th {
+    color: var(--text-muted);
+    font-weight: 600;
+    background: var(--background-secondary);
+}
+
+.main-stats-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.main-stats-total-row td {
+    font-weight: 600;
+    color: var(--text-normal);
+}
+
 /* 记录列表样式 - Notion 风格 */
 .accounting-records {
     margin-top: 24px;

@@ -14,6 +14,7 @@ interface AccountingConfig {
     quickCopyDays?: number; // 快速记账显示最近N天的记录
     billMerchantMap?: Record<string, { category: string; description?: string }>; // 账单商户关键字 → { 分类关键词, 描述 } 映射（用于bill.md自动分类）
     silentBillImport?: boolean; // 静默记账：识别成功后不弹窗，直接写入日记
+    showMainPageStats?: boolean; // 在主页面显示简化支出统计表格（默认隐藏）
     budgets?: {
         monthly: {
             total: number;
@@ -3374,6 +3375,7 @@ class AccountingView extends ItemView {
     categoryFilteredRecords: AccountingRecord[]; // 时间+分类筛选后的记录（用于展示）
     currentDateRange: { start: string; end: string; label: string };
     selectedCategory: string;                  // 当前选中的分类关键词，空字符串表示全部
+    statsContainer: HTMLElement;               // 主页面简化统计容器（可通过配置隐藏）
     recordsContainer: HTMLElement;
     timeDisplay: HTMLElement;
     timeFilterEl: FilterDropdown;              // 时间筛选下拉
@@ -3419,6 +3421,7 @@ class AccountingView extends ItemView {
         container.addClass('accounting-view');
 
         this.renderHeader(container);
+        this.statsContainer = container.createDiv('main-page-stats');
         this.renderRecordsList(container);
         
         // 初始加载数据
@@ -3747,9 +3750,58 @@ class AccountingView extends ItemView {
         return colors[category] ?? '#6c757d'; // 默认灰色
     }
 
+    /** 主页面简化支出统计：简单表格展示当前时间范围的总支出和分类支出（可在设置中开启，默认隐藏） */
+    renderMainPageStats() {
+        if (!this.statsContainer) return;
+
+        this.statsContainer.empty();
+
+        if (this.plugin.config.showMainPageStats !== true) {
+            this.statsContainer.addClass('hidden');
+            return;
+        }
+
+        // 基于时间筛选后的记录统计，不受分类筛选影响
+        const expenseByCategory: Record<string, number> = {};
+        let totalExpense = 0;
+        this.filteredRecords.forEach(record => {
+            if (record.isIncome) return;
+            expenseByCategory[record.category] = (expenseByCategory[record.category] || 0) + record.amount;
+            totalExpense += record.amount;
+        });
+
+        if (totalExpense <= 0) {
+            this.statsContainer.addClass('hidden');
+            return;
+        }
+
+        this.statsContainer.removeClass('hidden');
+
+        const table = this.statsContainer.createEl('table', { cls: 'main-stats-table' });
+        const headRow = table.createEl('thead').createEl('tr');
+        headRow.createEl('th', { text: '分类' });
+        headRow.createEl('th', { text: '支出' });
+
+        const tbody = table.createEl('tbody');
+
+        const totalRow = tbody.createEl('tr', { cls: 'main-stats-total-row' });
+        totalRow.createEl('td', { text: '总支出' });
+        totalRow.createEl('td', { text: `¥${totalExpense.toFixed(2)}` });
+
+        recordEntries(expenseByCategory)
+            .sort(([, a], [, b]) => b - a)
+            .forEach(([category, amount]) => {
+                const row = tbody.createEl('tr');
+                row.createEl('td', { text: category });
+                row.createEl('td', { text: `¥${amount.toFixed(2)}` });
+            });
+    }
+
     updateRecordsDisplay(records = this.currentRecords) {
+        this.renderMainPageStats();
+
         if (!this.recordsContainer) return;
-        
+
         this.recordsContainer.empty();
         
         if (!records || records.length === 0) {
@@ -4696,6 +4748,18 @@ class AccountingSettingTab extends PluginSettingTab {
                 .setValue(this.plugin.config.enableQuickCopy !== false)
                 .onChange(async (value) => {
                     this.plugin.config.enableQuickCopy = value;
+                    await this.plugin.saveConfig();
+                    // 刷新视图
+                    await this.plugin.refreshData();
+                }));
+
+        new Setting(containerEl)
+            .setName('在主页面显示支出统计')
+            .setDesc('开启后，记账主页面顶部以简单表格显示当前时间范围的总支出和各分类支出（默认隐藏，完整统计请打开统计页面）')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.config.showMainPageStats === true)
+                .onChange(async (value) => {
+                    this.plugin.config.showMainPageStats = value;
                     await this.plugin.saveConfig();
                     // 刷新视图
                     await this.plugin.refreshData();
