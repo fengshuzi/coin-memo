@@ -173,6 +173,20 @@ function formatLocalDate(date: Date): string {
     return `${year}-${month}-${day}`;
 }
 
+function buildExportFileName(appName: string, startDate: string, endDate: string): string {
+    const monthStart = /^(\d{4})-(\d{2})-01$/.exec(startDate);
+    if (monthStart) {
+        const year = Number(monthStart[1]);
+        const month = Number(monthStart[2]);
+        const lastDay = new Date(year, month, 0).getDate();
+        const fullMonthEnd = `${monthStart[1]}-${monthStart[2]}-${pad2(lastDay)}`;
+        if (endDate === fullMonthEnd) {
+            return `${appName}_${monthStart[1]}-${monthStart[2]}`;
+        }
+    }
+    return `${appName}_${startDate}_${endDate}`;
+}
+
 /** 从 Daily Notes 核心插件获取配置，失败返回 null */
 function getDailyNoteConfig(app: App): { format: string; folder: string } | null {
     try {
@@ -2039,6 +2053,19 @@ class MarkdownExportModal extends Modal {
     }
 }
 
+interface PdfExportPage {
+    content: HTMLElement;
+}
+
+interface PdfTableChunk {
+    element: HTMLElement;
+    tbody: HTMLTableSectionElement;
+}
+
+const PDF_PAGE_WIDTH_PX = 720;
+const PDF_PAGE_HEIGHT_PX = Math.floor(PDF_PAGE_WIDTH_PX * 297 / 210);
+const PDF_RENDER_SCALE = 2;
+
 // PDF 导出模态框
 class ExportPDFModal extends Modal {
     plugin: AccountingPlugin;
@@ -2086,27 +2113,28 @@ class ExportPDFModal extends Modal {
 
     generatePDFContent(container: HTMLElement): HTMLElement {
         const content = container.createDiv('pdf-content');
-        
+        const intro = content.createDiv('pdf-export-intro');
+
         // 标题
         const appName = this.plugin.config.appName || '每日记账';
-        content.createEl('h1', { 
-            text: `${appName} - 账单报告`, 
-            cls: 'pdf-title' 
+        intro.createEl('h1', {
+            text: `${appName} - 账单报告`,
+            cls: 'pdf-title'
         });
-        
+
         // 时间范围
-        content.createEl('p', { 
+        intro.createEl('p', {
             text: `时间范围: ${this.dateRange.label} (${this.dateRange.start} 至 ${this.dateRange.end})`,
             cls: 'pdf-date-range'
         });
-        
-        content.createEl('p', {
+
+        intro.createEl('p', {
             text: `导出时间: ${formatLocalDate(new Date())} ${new Date().toLocaleTimeString('zh-CN')}`,
             cls: 'pdf-export-time'
         });
 
         // 统计概览
-        const statsSection = content.createDiv('pdf-stats-section');
+        const statsSection = intro.createDiv('pdf-stats-section');
         statsSection.createEl('h2', { text: '统计概览' });
         
         const statsGrid = statsSection.createDiv('pdf-stats-grid');
@@ -2189,6 +2217,7 @@ class ExportPDFModal extends Modal {
                 
                 dayRecords.forEach(record => {
                     const row = dayTbody.createEl('tr');
+                    row.dataset.pdfRecord = 'true';
                     row.createEl('td', { text: record.category, cls: 'pdf-record-category' });
                     row.createEl('td', { text: record.description || '-', cls: 'pdf-record-desc' });
                     
@@ -2212,70 +2241,304 @@ class ExportPDFModal extends Modal {
         return grouped;
     }
 
+    private requireElement<T extends Element>(root: ParentNode, selector: string): T {
+        const element = root.querySelector<T>(selector);
+        if (!element) {
+            throw new Error(`PDF 内容缺少元素: ${selector}`);
+        }
+        return element;
+    }
+
+    private cloneElement(element: HTMLElement): HTMLElement {
+        return element.cloneNode(true) as HTMLElement;
+    }
+
+    private async waitForPDFLayout(root: HTMLElement): Promise<void> {
+        const ownerDoc = root.ownerDocument;
+        await ownerDoc.fonts.ready;
+        await Promise.all(
+            Array.from(root.querySelectorAll('img')).map(image => image.decode().catch(() => undefined))
+        );
+
+        const ownerWindow = ownerDoc.defaultView;
+        if (!ownerWindow) {
+            throw new Error('无法获取 PDF 渲染窗口');
+        }
+
+        const nextFrame = () => new Promise<void>(resolve => ownerWindow.requestAnimationFrame(() => resolve()));
+        await nextFrame();
+        await nextFrame();
+    }
+
+    private createPDFPage(container: HTMLElement): PdfExportPage {
+        const page = container.createDiv('pdf-export-page');
+        const content = page.createDiv('pdf-content pdf-export-page-content');
+        return { content };
+    }
+
+    private pageOverflows(page: PdfExportPage): boolean {
+        return page.content.scrollHeight > page.content.clientHeight;
+    }
+
+    private appendWholeBlock(source: HTMLElement, currentPage: PdfExportPage, pagesContainer: HTMLElement): PdfExportPage {
+        let page = currentPage;
+        let clone = this.cloneElement(source);
+        page.content.appendChild(clone);
+        if (!this.pageOverflows(page)) {
+            return page;
+        }
+
+        clone.remove();
+        if (page.content.childElementCount > 0) {
+            page = this.createPDFPage(pagesContainer);
+        }
+
+        clone = this.cloneElement(source);
+        page.content.appendChild(clone);
+        if (this.pageOverflows(page)) {
+            throw new Error('PDF 内容块超过单页高度');
+        }
+        return page;
+    }
+
+    private createCategoryChunk(source: HTMLElement, continued: boolean): PdfTableChunk {
+        const element = this.cloneElement(source);
+        const tbody = this.requireElement<HTMLTableSectionElement>(element, 'tbody');
+        tbody.empty();
+        if (continued) {
+            this.requireElement<HTMLElement>(element, 'h2').setText('分类统计（续）');
+        }
+        return { element, tbody };
+    }
+
+    private appendCategorySection(source: HTMLElement, currentPage: PdfExportPage, pagesContainer: HTMLElement): PdfExportPage {
+        let page = currentPage;
+        let wholeSection = this.cloneElement(source);
+        page.content.appendChild(wholeSection);
+        if (!this.pageOverflows(page)) {
+            return page;
+        }
+
+        wholeSection.remove();
+        if (page.content.childElementCount > 0) {
+            page = this.createPDFPage(pagesContainer);
+            wholeSection = this.cloneElement(source);
+            page.content.appendChild(wholeSection);
+            if (!this.pageOverflows(page)) {
+                return page;
+            }
+            wholeSection.remove();
+        }
+
+        const sourceRows = Array.from(source.querySelectorAll<HTMLTableRowElement>('tbody > tr'));
+        let chunk = this.createCategoryChunk(source, false);
+        page.content.appendChild(chunk.element);
+
+        sourceRows.forEach(sourceRow => {
+            let row = this.cloneElement(sourceRow);
+            chunk.tbody.appendChild(row);
+            if (!this.pageOverflows(page)) {
+                return;
+            }
+
+            row.remove();
+            if (chunk.tbody.childElementCount === 0) {
+                throw new Error('分类统计中的单行内容超过单页高度');
+            }
+
+            page = this.createPDFPage(pagesContainer);
+            chunk = this.createCategoryChunk(source, true);
+            page.content.appendChild(chunk.element);
+            row = this.cloneElement(sourceRow);
+            chunk.tbody.appendChild(row);
+            if (this.pageOverflows(page)) {
+                throw new Error('分类统计中的单行内容超过单页高度');
+            }
+        });
+
+        return page;
+    }
+
+    private createRecordsPageSection(source: HTMLElement, continued: boolean): HTMLElement {
+        const section = source.cloneNode(false) as HTMLElement;
+        if (!continued) {
+            const heading = this.cloneElement(this.requireElement<HTMLElement>(source, ':scope > h2'));
+            section.appendChild(heading);
+        }
+        return section;
+    }
+
+    private createDayGroupChunk(source: HTMLElement, continued: boolean): PdfTableChunk {
+        const element = this.cloneElement(source);
+        const tbody = this.requireElement<HTMLTableSectionElement>(element, 'tbody');
+        tbody.empty();
+        if (continued) {
+            const date = this.requireElement<HTMLElement>(element, '.pdf-day-date');
+            date.setText(`${date.textContent ?? ''}（续）`);
+        }
+        return { element, tbody };
+    }
+
+    private appendRecordsSection(source: HTMLElement, currentPage: PdfExportPage, pagesContainer: HTMLElement): void {
+        const sourceGroups = Array.from(source.querySelectorAll<HTMLElement>(':scope > .pdf-day-group'));
+        let page = currentPage;
+        let section = this.createRecordsPageSection(source, false);
+        let groupsOnPage = 0;
+        let placedRecords = 0;
+        page.content.appendChild(section);
+
+        const startRecordsPage = (continued: boolean) => {
+            page = this.createPDFPage(pagesContainer);
+            section = this.createRecordsPageSection(source, continued);
+            groupsOnPage = 0;
+            page.content.appendChild(section);
+        };
+
+        if (sourceGroups.length === 0) {
+            if (this.pageOverflows(page)) {
+                section.remove();
+                startRecordsPage(false);
+            }
+            return;
+        }
+
+        sourceGroups.forEach(sourceGroup => {
+            const sourceRows = Array.from(sourceGroup.querySelectorAll<HTMLTableRowElement>('tbody > tr'));
+            let wholeGroup = this.cloneElement(sourceGroup);
+            section.appendChild(wholeGroup);
+
+            if (!this.pageOverflows(page)) {
+                groupsOnPage += 1;
+                placedRecords += sourceRows.length;
+                return;
+            }
+
+            wholeGroup.remove();
+            if (groupsOnPage > 0) {
+                startRecordsPage(true);
+            } else if (page.content.childElementCount > 1) {
+                section.remove();
+                startRecordsPage(placedRecords > 0);
+            }
+
+            wholeGroup = this.cloneElement(sourceGroup);
+            section.appendChild(wholeGroup);
+            if (!this.pageOverflows(page)) {
+                groupsOnPage += 1;
+                placedRecords += sourceRows.length;
+                return;
+            }
+            wholeGroup.remove();
+
+            let chunk = this.createDayGroupChunk(sourceGroup, false);
+            section.appendChild(chunk.element);
+
+            sourceRows.forEach(sourceRow => {
+                let row = this.cloneElement(sourceRow);
+                chunk.tbody.appendChild(row);
+                if (this.pageOverflows(page)) {
+                    row.remove();
+                    if (chunk.tbody.childElementCount === 0) {
+                        throw new Error('单条账目内容超过单页高度');
+                    }
+
+                    groupsOnPage += 1;
+                    startRecordsPage(true);
+                    chunk = this.createDayGroupChunk(sourceGroup, true);
+                    section.appendChild(chunk.element);
+                    row = this.cloneElement(sourceRow);
+                    chunk.tbody.appendChild(row);
+                    if (this.pageOverflows(page)) {
+                        throw new Error('单条账目内容超过单页高度');
+                    }
+                }
+                placedRecords += 1;
+            });
+            groupsOnPage += 1;
+        });
+
+        if (placedRecords !== this.records.length) {
+            throw new Error(`PDF 分页记录数不一致: ${placedRecords}/${this.records.length}`);
+        }
+    }
+
+    private async createPDFPages(renderHost: HTMLElement): Promise<HTMLElement[]> {
+        const sourceContainer = renderHost.createDiv('pdf-export-source');
+        const sourceContent = this.generatePDFContent(sourceContainer);
+        await this.waitForPDFLayout(sourceContainer);
+
+        const pagesContainer = renderHost.createDiv('pdf-export-pages');
+        let page = this.createPDFPage(pagesContainer);
+
+        const intro = this.requireElement<HTMLElement>(sourceContent, ':scope > .pdf-export-intro');
+        page = this.appendWholeBlock(intro, page, pagesContainer);
+
+        const categorySection = sourceContent.querySelector<HTMLElement>(':scope > .pdf-category-section');
+        if (categorySection) {
+            page = this.appendCategorySection(categorySection, page, pagesContainer);
+        }
+
+        const recordsSection = this.requireElement<HTMLElement>(sourceContent, ':scope > .pdf-records-section');
+        this.appendRecordsSection(recordsSection, page, pagesContainer);
+        sourceContainer.remove();
+        await this.waitForPDFLayout(pagesContainer);
+
+        const pages = Array.from(pagesContainer.querySelectorAll<HTMLElement>(':scope > .pdf-export-page'));
+        if (pages.length === 0) {
+            throw new Error('没有生成 PDF 页面');
+        }
+
+        pages.forEach((pageElement, index) => {
+            const content = this.requireElement<HTMLElement>(pageElement, ':scope > .pdf-export-page-content');
+            if (content.scrollHeight > content.clientHeight) {
+                throw new Error(`PDF 第 ${index + 1} 页内容溢出`);
+            }
+        });
+
+        const renderedRecordCount = pagesContainer.querySelectorAll('[data-pdf-record="true"]').length;
+        if (renderedRecordCount !== this.records.length) {
+            throw new Error(`PDF 页面记录数不一致: ${renderedRecordCount}/${this.records.length}`);
+        }
+        return pages;
+    }
+
     async exportToPDF() {
+        let renderHost: HTMLElement | null = null;
         try {
             new Notice('正在生成 PDF...');
 
-            // 获取预览容器
-            const previewContainer = this.contentEl.querySelector('.export-preview-container') as HTMLElement;
-            if (!previewContainer) {
-                throw new Error('找不到预览内容');
-            }
-
-            // 创建一个临时容器用于渲染 PDF 内容
             const ownerDoc = this.contentEl.ownerDocument;
-            const tempContainer = ownerDoc.createElement('div');
-            tempContainer.addClass('pdf-temp-container');
-            const parser = new DOMParser();
-            const parsedDoc = parser.parseFromString(this.generatePDFHTML(), 'text/html');
-            const fragment = ownerDoc.createDocumentFragment();
-            parsedDoc.body.childNodes.forEach(node => fragment.appendChild(node.cloneNode(true)));
-            tempContainer.appendChild(fragment);
-            ownerDoc.body.appendChild(tempContainer);
+            renderHost = ownerDoc.body.createDiv('pdf-export-render-host');
+            const pages = await this.createPDFPages(renderHost);
+            const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true });
 
-            // 等待渲染完成
-            await new Promise(resolve => window.setTimeout(resolve, 100));
+            for (let index = 0; index < pages.length; index += 1) {
+                const canvas = await html2canvas(pages[index], {
+                    scale: PDF_RENDER_SCALE,
+                    useCORS: true,
+                    logging: false,
+                    backgroundColor: '#ffffff',
+                    width: PDF_PAGE_WIDTH_PX,
+                    height: PDF_PAGE_HEIGHT_PX,
+                    windowWidth: PDF_PAGE_WIDTH_PX,
+                    windowHeight: PDF_PAGE_HEIGHT_PX,
+                    scrollX: 0,
+                    scrollY: 0
+                });
 
-            // 使用 html2canvas 将 HTML 转换为 canvas
-            const canvas = await html2canvas(tempContainer, {
-                scale: 2, // 提高清晰度
-                useCORS: true,
-                logging: false,
-                backgroundColor: '#ffffff'
-            });
-
-            // 清理临时容器
-            ownerDoc.body.removeChild(tempContainer);
-
-            // 创建 PDF
-            const imgWidth = 210; // A4 宽度 (mm)
-            const pageHeight = 297; // A4 高度 (mm)
-            const imgHeight = (canvas.height * imgWidth) / canvas.width;
-
-            const pdf = new jsPDF('p', 'mm', 'a4');
-
-            // 如果内容超过一页，需要分页
-            let heightLeft = imgHeight;
-            let position = 0;
-            const imgData = canvas.toDataURL('image/png');
-
-            // 添加第一页
-            pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-            heightLeft -= pageHeight;
-
-            // 添加后续页面
-            while (heightLeft > 0) {
-                position = heightLeft - imgHeight;
-                pdf.addPage();
-                pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-                heightLeft -= pageHeight;
+                try {
+                    if (index > 0) {
+                        pdf.addPage();
+                    }
+                    pdf.addImage(canvas, 'PNG', 0, 0, 210, 297, `page-${index + 1}`, 'FAST');
+                } finally {
+                    canvas.width = 0;
+                    canvas.height = 0;
+                }
             }
 
-            // 生成文件名
             const appName = this.plugin.config.appName || '每日记账';
-            const fileName = `${appName}_${this.dateRange.start}_${this.dateRange.end}.pdf`;
-
-            // 保存 PDF
+            const fileName = `${buildExportFileName(appName, this.dateRange.start, this.dateRange.end)}.pdf`;
             pdf.save(fileName);
 
             new Notice(`PDF 已保存: ${fileName}`);
@@ -2283,118 +2546,9 @@ class ExportPDFModal extends Modal {
         } catch (error) {
             console.error('导出 PDF 失败:', error);
             new Notice('导出 PDF 失败，请重试');
+        } finally {
+            renderHost?.remove();
         }
-    }
-
-    // 生成用于 PDF 渲染的 HTML
-    generatePDFHTML(): string {
-        const appName = this.plugin.config.appName || '每日记账';
-        const { totalIncome, totalExpense } = this.stats;
-        const balance = totalIncome - totalExpense;
-
-        // 按日期分组
-        const groupedRecords = this.groupRecordsByDate(this.records);
-        const sortedDates = Object.keys(groupedRecords).sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
-
-        // 生成分类统计 HTML
-        let categoryStatsHTML = '';
-        if (Object.keys(this.stats.categoryStats).length > 0) {
-            const totalForPercentage = totalExpense > 0 ? totalExpense : 1;
-            const categoryRows = categoryStatEntries(this.stats.categoryStats)
-                .sort(([,a], [,b]) => b.total - a.total)
-                .map(([category, data]) => {
-                    const isIncome = data.records.some(r => r.isIncome);
-                    const percentage = isIncome ? '-' : `${((data.total / totalForPercentage) * 100).toFixed(1)}%`;
-                    return `
-                        <tr>
-                            <td style="padding: 8px 12px; border-bottom: 1px solid #e5e7eb;">${category}</td>
-                            <td style="padding: 8px 12px; border-bottom: 1px solid #e5e7eb;">¥${data.total.toFixed(2)}</td>
-                            <td style="padding: 8px 12px; border-bottom: 1px solid #e5e7eb;">${data.count} 笔</td>
-                            <td style="padding: 8px 12px; border-bottom: 1px solid #e5e7eb;">${percentage}</td>
-                        </tr>
-                    `;
-                })
-                .join('');
-
-            categoryStatsHTML = `
-                <div style="margin: 20px 0;">
-                    <h2 style="font-size: 16px; font-weight: 600; margin-bottom: 12px; color: #374151;">分类统计</h2>
-                    <table style="width: 100%; border-collapse: collapse; font-size: 13px; border: 1px solid #e5e7eb;">
-                        <thead>
-                            <tr style="background: #f9fafb;">
-                                <th style="padding: 8px 12px; text-align: left; font-weight: 600;">分类</th>
-                                <th style="padding: 8px 12px; text-align: left; font-weight: 600;">金额</th>
-                                <th style="padding: 8px 12px; text-align: left; font-weight: 600;">笔数</th>
-                                <th style="padding: 8px 12px; text-align: left; font-weight: 600;">占比</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${categoryRows}
-                        </tbody>
-                    </table>
-                </div>
-            `;
-        }
-
-        // 生成详细记录 HTML
-        const recordsHTML = sortedDates.map(date => {
-            const dayRecords = groupedRecords[date];
-            const dayTotal = dayRecords.reduce((sum, r) => sum + (r.isIncome ? r.amount : -r.amount), 0);
-
-            const recordRows = dayRecords.map(record => `
-                <tr>
-                    <td style="padding: 6px 12px; border-bottom: 1px solid #f3f4f6; font-weight: 500; width: 80px;">${record.category}</td>
-                    <td style="padding: 6px 12px; border-bottom: 1px solid #f3f4f6; color: #6b7280;">${record.description || '-'}</td>
-                    <td style="padding: 6px 12px; border-bottom: 1px solid #f3f4f6; text-align: right; font-weight: 600; width: 100px; color: ${record.isIncome ? '#059669' : '#dc2626'};">
-                        ${record.isIncome ? '+' : '-'}¥${record.amount.toFixed(2)}
-                    </td>
-                </tr>
-            `).join('');
-
-            return `
-                <div style="margin: 12px 0; border: 1px solid #e5e7eb; border-radius: 6px; overflow: hidden;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: #f9fafb; border-bottom: 1px solid #e5e7eb;">
-                        <span style="font-weight: 600; color: #1a1a1a;">${date}</span>
-                        <span style="font-weight: 700; color: ${dayTotal >= 0 ? '#059669' : '#dc2626'};">¥${dayTotal.toFixed(2)}</span>
-                    </div>
-                    <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
-                        <tbody>
-                            ${recordRows}
-                        </tbody>
-                    </table>
-                </div>
-            `;
-        }).join('');
-
-        return `
-            <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; color: #1a1a1a; line-height: 1.6;">
-                <h1 style="font-size: 22px; font-weight: 700; margin-bottom: 8px; color: #1a1a1a; border-bottom: 2px solid #3b82f6; padding-bottom: 10px;">${appName} - 账单报告</h1>
-                <p style="color: #6b7280; font-size: 13px; margin-bottom: 4px;">时间范围: ${this.dateRange.label} (${this.dateRange.start} 至 ${this.dateRange.end})</p>
-                <p style="color: #6b7280; font-size: 13px; margin-bottom: 16px;">导出时间: ${formatLocalDate(new Date())} ${new Date().toLocaleTimeString('zh-CN')}</p>
-
-                <div style="display: flex; gap: 12px; margin: 16px 0;">
-                    <div style="flex: 1; padding: 14px; border-radius: 6px; text-align: center; background: #f0fdf4; border: 1px solid #bbf7d0;">
-                        <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">总收入</div>
-                        <div style="font-size: 18px; font-weight: 700; color: #059669;">¥${totalIncome.toFixed(2)}</div>
-                    </div>
-                    <div style="flex: 1; padding: 14px; border-radius: 6px; text-align: center; background: #fef3c7; border: 1px solid #fcd34d;">
-                        <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">总支出</div>
-                        <div style="font-size: 18px; font-weight: 700; color: #dc2626;">¥${totalExpense.toFixed(2)}</div>
-                    </div>
-                    <div style="flex: 1; padding: 14px; border-radius: 6px; text-align: center; background: ${balance >= 0 ? '#ecfdf5' : '#fef2f2'}; border: 1px solid ${balance >= 0 ? '#86efac' : '#fca5a5'};">
-                        <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">结余</div>
-                        <div style="font-size: 18px; font-weight: 700; color: ${balance >= 0 ? '#059669' : '#dc2626'};">¥${balance.toFixed(2)}</div>
-                    </div>
-                </div>
-
-                ${categoryStatsHTML}
-
-                <div style="margin: 20px 0;">
-                    <h2 style="font-size: 16px; font-weight: 600; margin-bottom: 12px; color: #374151;">详细记录 (共 ${this.records.length} 笔)</h2>
-                    ${recordsHTML}
-                </div>
-            </div>
-        `;
     }
 
 }
@@ -4116,7 +4270,7 @@ class AccountingView extends ItemView {
             
             // 生成默认文件名：应用名_时间范围
             const appName = this.plugin.config.appName || '每日记账';
-            const fileName = `${appName}_${this.currentDateRange.start}_${this.currentDateRange.end}`;
+            const fileName = buildExportFileName(appName, this.currentDateRange.start, this.currentDateRange.end);
             
             // 显示导出模态框
             new MarkdownExportModal(this.app, markdown, fileName).open();

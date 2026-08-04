@@ -2507,15 +2507,60 @@ button.accounting-btn-primary:hover {
     margin: 0;
 }
 
-/* PDF export temp container */
-.pdf-temp-container {
-    position: absolute;
-    left: -9999px;
+/* Fixed-size PDF pages rendered one at a time by html2canvas. */
+.pdf-export-render-host {
+    --background-primary: #ffffff;
+    --background-secondary: #f9fafb;
+    --background-modifier-border: #e5e7eb;
+    --interactive-accent: #3b82f6;
+    --text-normal: #1a1a1a;
+    --text-muted: #6b7280;
+    position: fixed;
+    left: -10000px;
     top: 0;
-    width: 800px;
-    padding: 20px;
+    width: 720px;
+    pointer-events: none;
+}
+
+.pdf-export-source > .pdf-content,
+.pdf-export-page {
+    width: 720px;
+    box-sizing: border-box;
     background: #ffffff;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: #1a1a1a;
+}
+
+.pdf-export-source > .pdf-content {
+    padding: 32px;
+}
+
+.pdf-export-page {
+    height: 1018px;
+    overflow: hidden;
+}
+
+.pdf-export-page-content {
+    width: 100%;
+    height: 100%;
+    padding: 32px;
+    box-sizing: border-box;
+    overflow: visible;
+    font-size: 13px;
+}
+
+.pdf-export-render-host .pdf-stats-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+}
+
+.pdf-export-render-host .pdf-title {
+    font-size: 20px;
+}
+
+.pdf-export-render-host .pdf-record-desc {
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 /* Merchant textarea */
