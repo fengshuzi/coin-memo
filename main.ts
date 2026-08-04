@@ -1,5 +1,6 @@
 import { Plugin, ItemView, Modal, Notice, Menu, TFile, TAbstractFile, TFolder, PluginSettingTab, Setting, App, WorkspaceLeaf, setIcon } from 'obsidian';
 import { jsPDF } from 'jspdf';
+import html2canvas from 'html2canvas';
 
 // 类型定义
 interface AccountingConfig {
@@ -2211,64 +2212,70 @@ class ExportPDFModal extends Modal {
         return grouped;
     }
 
-    exportToPDF() {
+    async exportToPDF() {
         try {
             new Notice('正在生成 PDF...');
 
-            const appName = this.plugin.config.appName || '每日记账';
-            const { totalIncome, totalExpense } = this.stats;
-            const balance = totalIncome - totalExpense;
-
-            const pdf = new jsPDF('p', 'mm', 'a4');
-            const layout = new PdfReportLayout(pdf);
-
-            // 标题
-            pdf.setFontSize(16);
-            layout.writeText(`${appName} - 账单报告`, { bold: true, gap: 2 });
-            layout.writeRule();
-
-            // 时间范围与导出时间
-            pdf.setFontSize(10);
-            layout.writeText(`时间范围: ${this.dateRange.label} (${this.dateRange.start} 至 ${this.dateRange.end})`, { color: PdfReportLayout.GRAY, gap: 1 });
-            layout.writeText(`导出时间: ${formatLocalDate(new Date())} ${new Date().toLocaleTimeString('zh-CN')}`, { color: PdfReportLayout.GRAY, gap: 5 });
-
-            // 统计概览：三张卡片
-            layout.writeStatCards([
-                { label: '总收入', value: `¥${totalIncome.toFixed(2)}`, color: PdfReportLayout.GREEN },
-                { label: '总支出', value: `¥${totalExpense.toFixed(2)}`, color: PdfReportLayout.RED },
-                { label: '结余', value: `¥${balance.toFixed(2)}`, color: balance >= 0 ? PdfReportLayout.GREEN : PdfReportLayout.RED },
-            ]);
-
-            // 分类统计表
-            const categoryEntries = categoryStatEntries(this.stats.categoryStats);
-            if (categoryEntries.length > 0) {
-                layout.writeSectionTitle('分类统计');
-                const totalForPercentage = totalExpense > 0 ? totalExpense : 1;
-                const rows = categoryEntries
-                    .sort(([, a], [, b]) => b.total - a.total)
-                    .map(([category, data]) => {
-                        const isIncome = data.records.some(r => r.isIncome);
-                        const percentage = isIncome ? '-' : `${((data.total / totalForPercentage) * 100).toFixed(1)}%`;
-                        return [category, `¥${data.total.toFixed(2)}`, `${data.count} 笔`, percentage];
-                    });
-                layout.writeTable(['分类', '金额', '笔数', '占比'], rows, [null, 'right', 'right', 'right']);
+            // 获取预览容器
+            const previewContainer = this.contentEl.querySelector('.export-preview-container') as HTMLElement;
+            if (!previewContainer) {
+                throw new Error('找不到预览内容');
             }
 
-            // 详细记录（按日期分组，每组要么完整放下、要么整组换页，绝不拦腰切断）
-            layout.writeSectionTitle(`详细记录 (共 ${this.records.length} 笔)`);
-            const groupedRecords = this.groupRecordsByDate(this.records);
-            recordEntries(groupedRecords)
-                .sort(([a], [b]) => new Date(b).getTime() - new Date(a).getTime())
-                .forEach(([date, dayRecords]) => {
-                    const dayTotal = dayRecords.reduce((sum, r) => sum + (r.isIncome ? r.amount : -r.amount), 0);
-                    const rows = dayRecords.map(record => ({
-                        cells: [record.category, record.description || '-', `${record.isIncome ? '+' : '-'}¥${record.amount.toFixed(2)}`] as [string, string, string],
-                        amountColor: record.isIncome ? PdfReportLayout.GREEN : PdfReportLayout.RED,
-                    }));
-                    layout.writeDayGroup(date, `¥${dayTotal.toFixed(2)}`, dayTotal >= 0 ? PdfReportLayout.GREEN : PdfReportLayout.RED, rows);
-                });
+            // 创建一个临时容器用于渲染 PDF 内容
+            const ownerDoc = this.contentEl.ownerDocument;
+            const tempContainer = ownerDoc.createElement('div');
+            tempContainer.addClass('pdf-temp-container');
+            const parser = new DOMParser();
+            const parsedDoc = parser.parseFromString(this.generatePDFHTML(), 'text/html');
+            const fragment = ownerDoc.createDocumentFragment();
+            parsedDoc.body.childNodes.forEach(node => fragment.appendChild(node.cloneNode(true)));
+            tempContainer.appendChild(fragment);
+            ownerDoc.body.appendChild(tempContainer);
 
+            // 等待渲染完成
+            await new Promise(resolve => window.setTimeout(resolve, 100));
+
+            // 使用 html2canvas 将 HTML 转换为 canvas
+            const canvas = await html2canvas(tempContainer, {
+                scale: 2, // 提高清晰度
+                useCORS: true,
+                logging: false,
+                backgroundColor: '#ffffff'
+            });
+
+            // 清理临时容器
+            ownerDoc.body.removeChild(tempContainer);
+
+            // 创建 PDF
+            const imgWidth = 210; // A4 宽度 (mm)
+            const pageHeight = 297; // A4 高度 (mm)
+            const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+            const pdf = new jsPDF('p', 'mm', 'a4');
+
+            // 如果内容超过一页，需要分页
+            let heightLeft = imgHeight;
+            let position = 0;
+            const imgData = canvas.toDataURL('image/png');
+
+            // 添加第一页
+            pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+            heightLeft -= pageHeight;
+
+            // 添加后续页面
+            while (heightLeft > 0) {
+                position = heightLeft - imgHeight;
+                pdf.addPage();
+                pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+                heightLeft -= pageHeight;
+            }
+
+            // 生成文件名
+            const appName = this.plugin.config.appName || '每日记账';
             const fileName = `${appName}_${this.dateRange.start}_${this.dateRange.end}.pdf`;
+
+            // 保存 PDF
             pdf.save(fileName);
 
             new Notice(`PDF 已保存: ${fileName}`);
@@ -2279,217 +2286,117 @@ class ExportPDFModal extends Modal {
         }
     }
 
-}
+    // 生成用于 PDF 渲染的 HTML
+    generatePDFHTML(): string {
+        const appName = this.plugin.config.appName || '每日记账';
+        const { totalIncome, totalExpense } = this.stats;
+        const balance = totalIncome - totalExpense;
 
-type PdfColor = [number, number, number];
-type PdfAlign = 'left' | 'right' | null;
+        // 按日期分组
+        const groupedRecords = this.groupRecordsByDate(this.records);
+        const sortedDates = Object.keys(groupedRecords).sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
 
-// 用 jsPDF 原生 API 绘制账单的布局助手。
-// 内置字体只覆盖 Latin-1，CJK 字符按「方块宽度」估算排版并直接写入文本流，
-// 由 PDF 阅读器的字体回退机制负责显示。
-class PdfReportLayout {
-    static readonly GREEN: PdfColor = [5, 150, 105];
-    static readonly RED: PdfColor = [220, 38, 38];
-    static readonly GRAY: PdfColor = [107, 114, 128];
-    static readonly TEXT: PdfColor = [26, 26, 26];
-    static readonly LINE: PdfColor = [229, 231, 235];
-    static readonly HEADER_BG: PdfColor = [249, 250, 251];
+        // 生成分类统计 HTML
+        let categoryStatsHTML = '';
+        if (Object.keys(this.stats.categoryStats).length > 0) {
+            const totalForPercentage = totalExpense > 0 ? totalExpense : 1;
+            const categoryRows = categoryStatEntries(this.stats.categoryStats)
+                .sort(([,a], [,b]) => b.total - a.total)
+                .map(([category, data]) => {
+                    const isIncome = data.records.some(r => r.isIncome);
+                    const percentage = isIncome ? '-' : `${((data.total / totalForPercentage) * 100).toFixed(1)}%`;
+                    return `
+                        <tr>
+                            <td style="padding: 8px 12px; border-bottom: 1px solid #e5e7eb;">${category}</td>
+                            <td style="padding: 8px 12px; border-bottom: 1px solid #e5e7eb;">¥${data.total.toFixed(2)}</td>
+                            <td style="padding: 8px 12px; border-bottom: 1px solid #e5e7eb;">${data.count} 笔</td>
+                            <td style="padding: 8px 12px; border-bottom: 1px solid #e5e7eb;">${percentage}</td>
+                        </tr>
+                    `;
+                })
+                .join('');
 
-    private readonly margin = 15;
-    private readonly pageW = 210;
-    private readonly pageH = 297;
-    private readonly bottom = 285;
-    private y = 15;
-
-    constructor(private pdf: jsPDF) {}
-
-    // 内置字体只声明了 Latin-1 宽度，CJK 会落到 default width(1 个方块)——
-    // 恰好接近 CJK 实际方块宽度，而 Latin 部分用真实字宽，无需自己估算
-    textWidthMm(text: string, fontSize: number, bold = false): number {
-        this.pdf.setFont('helvetica', bold ? 'bold' : 'normal');
-        this.pdf.setFontSize(fontSize);
-        return this.pdf.getStringUnitWidth(text) * fontSize * 0.3528;
-    }
-
-    fitText(text: string, maxWidthMm: number, fontSize: number, bold = false): string {
-        if (this.textWidthMm(text, fontSize, bold) <= maxWidthMm) return text;
-        const ellipsis = '...';
-        let result = text;
-        while (result.length > 0 && this.textWidthMm(result + ellipsis, fontSize, bold) > maxWidthMm) {
-            result = result.slice(0, -1);
+            categoryStatsHTML = `
+                <div style="margin: 20px 0;">
+                    <h2 style="font-size: 16px; font-weight: 600; margin-bottom: 12px; color: #374151;">分类统计</h2>
+                    <table style="width: 100%; border-collapse: collapse; font-size: 13px; border: 1px solid #e5e7eb;">
+                        <thead>
+                            <tr style="background: #f9fafb;">
+                                <th style="padding: 8px 12px; text-align: left; font-weight: 600;">分类</th>
+                                <th style="padding: 8px 12px; text-align: left; font-weight: 600;">金额</th>
+                                <th style="padding: 8px 12px; text-align: left; font-weight: 600;">笔数</th>
+                                <th style="padding: 8px 12px; text-align: left; font-weight: 600;">占比</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${categoryRows}
+                        </tbody>
+                    </table>
+                </div>
+            `;
         }
-        return result + ellipsis;
+
+        // 生成详细记录 HTML
+        const recordsHTML = sortedDates.map(date => {
+            const dayRecords = groupedRecords[date];
+            const dayTotal = dayRecords.reduce((sum, r) => sum + (r.isIncome ? r.amount : -r.amount), 0);
+
+            const recordRows = dayRecords.map(record => `
+                <tr>
+                    <td style="padding: 6px 12px; border-bottom: 1px solid #f3f4f6; font-weight: 500; width: 80px;">${record.category}</td>
+                    <td style="padding: 6px 12px; border-bottom: 1px solid #f3f4f6; color: #6b7280;">${record.description || '-'}</td>
+                    <td style="padding: 6px 12px; border-bottom: 1px solid #f3f4f6; text-align: right; font-weight: 600; width: 100px; color: ${record.isIncome ? '#059669' : '#dc2626'};">
+                        ${record.isIncome ? '+' : '-'}¥${record.amount.toFixed(2)}
+                    </td>
+                </tr>
+            `).join('');
+
+            return `
+                <div style="margin: 12px 0; border: 1px solid #e5e7eb; border-radius: 6px; overflow: hidden;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: #f9fafb; border-bottom: 1px solid #e5e7eb;">
+                        <span style="font-weight: 600; color: #1a1a1a;">${date}</span>
+                        <span style="font-weight: 700; color: ${dayTotal >= 0 ? '#059669' : '#dc2626'};">¥${dayTotal.toFixed(2)}</span>
+                    </div>
+                    <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                        <tbody>
+                            ${recordRows}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }).join('');
+
+        return `
+            <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; color: #1a1a1a; line-height: 1.6;">
+                <h1 style="font-size: 22px; font-weight: 700; margin-bottom: 8px; color: #1a1a1a; border-bottom: 2px solid #3b82f6; padding-bottom: 10px;">${appName} - 账单报告</h1>
+                <p style="color: #6b7280; font-size: 13px; margin-bottom: 4px;">时间范围: ${this.dateRange.label} (${this.dateRange.start} 至 ${this.dateRange.end})</p>
+                <p style="color: #6b7280; font-size: 13px; margin-bottom: 16px;">导出时间: ${formatLocalDate(new Date())} ${new Date().toLocaleTimeString('zh-CN')}</p>
+
+                <div style="display: flex; gap: 12px; margin: 16px 0;">
+                    <div style="flex: 1; padding: 14px; border-radius: 6px; text-align: center; background: #f0fdf4; border: 1px solid #bbf7d0;">
+                        <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">总收入</div>
+                        <div style="font-size: 18px; font-weight: 700; color: #059669;">¥${totalIncome.toFixed(2)}</div>
+                    </div>
+                    <div style="flex: 1; padding: 14px; border-radius: 6px; text-align: center; background: #fef3c7; border: 1px solid #fcd34d;">
+                        <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">总支出</div>
+                        <div style="font-size: 18px; font-weight: 700; color: #dc2626;">¥${totalExpense.toFixed(2)}</div>
+                    </div>
+                    <div style="flex: 1; padding: 14px; border-radius: 6px; text-align: center; background: ${balance >= 0 ? '#ecfdf5' : '#fef2f2'}; border: 1px solid ${balance >= 0 ? '#86efac' : '#fca5a5'};">
+                        <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">结余</div>
+                        <div style="font-size: 18px; font-weight: 700; color: ${balance >= 0 ? '#059669' : '#dc2626'};">¥${balance.toFixed(2)}</div>
+                    </div>
+                </div>
+
+                ${categoryStatsHTML}
+
+                <div style="margin: 20px 0;">
+                    <h2 style="font-size: 16px; font-weight: 600; margin-bottom: 12px; color: #374151;">详细记录 (共 ${this.records.length} 笔)</h2>
+                    ${recordsHTML}
+                </div>
+            </div>
+        `;
     }
 
-    private ensureSpace(height: number) {
-        if (this.y + height > this.bottom) {
-            this.pdf.addPage();
-            this.y = this.margin;
-        }
-    }
-
-    private newPage() {
-        this.pdf.addPage();
-        this.y = this.margin;
-    }
-
-    private setColor(color: PdfColor) {
-        this.pdf.setTextColor(color[0], color[1], color[2]);
-    }
-
-    writeText(text: string, opts: { bold?: boolean; color?: PdfColor; gap?: number } = {}) {
-        const lineH = this.pdf.getFontSize() * 0.45;
-        this.ensureSpace(lineH);
-        if (opts.color) this.setColor(opts.color);
-        this.pdf.setFont('helvetica', opts.bold ? 'bold' : 'normal');
-        this.pdf.text(text, this.margin, this.y + lineH * 0.8);
-        this.pdf.setFont('helvetica', 'normal');
-        this.setColor(PdfReportLayout.TEXT);
-        this.y += lineH + (opts.gap ?? 1);
-    }
-
-    writeRule() {
-        this.ensureSpace(2);
-        this.pdf.setDrawColor(59, 130, 246);
-        this.pdf.setLineWidth(0.6);
-        this.pdf.line(this.margin, this.y, this.pageW - this.margin, this.y);
-        this.y += 3;
-    }
-
-    writeSectionTitle(title: string) {
-        this.ensureSpace(14);
-        this.y += 3;
-        this.pdf.setFontSize(13);
-        this.pdf.setFont('helvetica', 'bold');
-        this.setColor([55, 65, 81]);
-        this.pdf.text(title, this.margin, this.y + 3.5);
-        this.pdf.setFont('helvetica', 'normal');
-        this.setColor(PdfReportLayout.TEXT);
-        this.y += 8;
-        this.pdf.setFontSize(10);
-    }
-
-    writeStatCards(cards: { label: string; value: string; color: PdfColor }[]) {
-        const cardH = 18;
-        this.ensureSpace(cardH + 4);
-        const gap = 4;
-        const cardW = (this.pageW - this.margin * 2 - gap * (cards.length - 1)) / cards.length;
-        cards.forEach((card, i) => {
-            const x = this.margin + i * (cardW + gap);
-            this.pdf.setFillColor(249, 250, 251);
-            this.pdf.setDrawColor(...PdfReportLayout.LINE);
-            this.pdf.setLineWidth(0.2);
-            this.pdf.roundedRect(x, this.y, cardW, cardH, 1.5, 1.5, 'FD');
-
-            this.pdf.setFontSize(8);
-            this.setColor(PdfReportLayout.GRAY);
-            this.pdf.text(card.label, x + cardW / 2, this.y + 6, { align: 'center', maxWidth: cardW - 4 });
-
-            this.pdf.setFontSize(12);
-            this.pdf.setFont('helvetica', 'bold');
-            this.setColor(card.color);
-            this.pdf.text(card.value, x + cardW / 2, this.y + 13.5, { align: 'center', maxWidth: cardW - 4 });
-            this.pdf.setFont('helvetica', 'normal');
-            this.setColor(PdfReportLayout.TEXT);
-            this.pdf.setFontSize(10);
-        });
-        this.y += cardH + 4;
-    }
-
-    // 通用表格：首行深色表头，行高分页时重复表头
-    writeTable(headers: string[], rows: string[][], aligns: PdfAlign[]) {
-        const tableW = this.pageW - this.margin * 2;
-        const colW = tableW / headers.length;
-        const rowH = 7;
-        const tableTop = { value: 0 };
-
-        const drawHeader = () => {
-            this.pdf.setFillColor(...PdfReportLayout.HEADER_BG);
-            this.pdf.rect(this.margin, this.y, tableW, rowH, 'F');
-            this.pdf.setFontSize(9);
-            this.pdf.setFont('helvetica', 'bold');
-            headers.forEach((h, i) => {
-                this.setColor([55, 65, 81]);
-                const tx = aligns[i] === 'right' ? this.margin + (i + 1) * colW - 2 : this.margin + i * colW + 2;
-                this.pdf.text(h, tx, this.y + 4.8, { align: aligns[i] === 'right' ? 'right' : 'left' });
-            });
-            this.pdf.setFont('helvetica', 'normal');
-            this.setColor(PdfReportLayout.TEXT);
-            this.pdf.setFontSize(10);
-            this.y += rowH;
-        };
-
-        this.ensureSpace(rowH);
-        tableTop.value = this.y;
-        drawHeader();
-        rows.forEach((row) => {
-            if (this.y + rowH > this.bottom) {
-                this.newPage();
-                tableTop.value = this.y;
-                drawHeader();
-            }
-            row.forEach((cell, i) => {
-                this.pdf.setFontSize(9);
-                const tx = aligns[i] === 'right' ? this.margin + (i + 1) * colW - 2 : this.margin + i * colW + 2;
-                this.pdf.text(this.fitText(cell, colW - 4, 9), tx, this.y + 4.8, { align: aligns[i] === 'right' ? 'right' : 'left' });
-            });
-            this.pdf.setFontSize(10);
-            this.pdf.setDrawColor(...PdfReportLayout.LINE);
-            this.pdf.setLineWidth(0.1);
-            this.pdf.line(this.margin, this.y + rowH, this.pageW - this.margin, this.y + rowH);
-            this.y += rowH;
-        });
-        this.pdf.setLineWidth(0.2);
-        this.pdf.rect(this.margin, tableTop.value, tableW, this.y - tableTop.value);
-        this.y += 4;
-    }
-
-    // 日期分组卡片：整组要么放下、要么换页，绝不切断
-    writeDayGroup(date: string, total: string, totalColor: PdfColor, rows: { cells: [string, string, string]; amountColor: PdfColor }[]) {
-        const headerH = 8;
-        const rowH = 6.5;
-        const groupH = headerH + rowH * rows.length + 3;
-        const tableW = this.pageW - this.margin * 2;
-        this.ensureSpace(groupH + 3);
-
-        const top = this.y;
-        // 头部
-        this.pdf.setFillColor(...PdfReportLayout.HEADER_BG);
-        this.pdf.rect(this.margin, this.y, tableW, headerH, 'F');
-        this.pdf.setFontSize(10);
-        this.pdf.setFont('helvetica', 'bold');
-        this.pdf.text(date, this.margin + 2, this.y + 5.5);
-        this.setColor(totalColor);
-        this.pdf.text(total, this.pageW - this.margin - 2, this.y + 5.5, { align: 'right' });
-        this.pdf.setFont('helvetica', 'normal');
-        this.setColor(PdfReportLayout.TEXT);
-        this.y += headerH;
-
-        // 记录行
-        const colCategory = 30;
-        const colAmount = 35;
-        this.pdf.setFontSize(9);
-        rows.forEach((row) => {
-            const [category, desc, amount] = row.cells;
-            this.pdf.text(this.fitText(category, colCategory - 3, 9), this.margin + 2, this.y + 4.5);
-            this.setColor(PdfReportLayout.GRAY);
-            this.pdf.text(this.fitText(desc, tableW - colCategory - colAmount - 6, 9), this.margin + colCategory + 2, this.y + 4.5);
-            this.setColor(row.amountColor);
-            this.pdf.text(amount, this.pageW - this.margin - 2, this.y + 4.5, { align: 'right' });
-            this.setColor(PdfReportLayout.TEXT);
-            this.pdf.setDrawColor(243, 244, 246);
-            this.pdf.setLineWidth(0.1);
-            this.pdf.line(this.margin, this.y + rowH, this.pageW - this.margin, this.y + rowH);
-            this.y += rowH;
-        });
-        this.pdf.setFontSize(10);
-
-        // 外框 + 组间距
-        this.pdf.setDrawColor(...PdfReportLayout.LINE);
-        this.pdf.setLineWidth(0.2);
-        this.pdf.rect(this.margin, top, tableW, this.y - top);
-        this.y += 3;
-    }
 }
 
 // 快速记账模态框

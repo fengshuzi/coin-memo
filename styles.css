@@ -2508,6 +2508,16 @@ button.accounting-btn-primary:hover {
 }
 
 /* PDF export temp container */
+.pdf-temp-container {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    width: 800px;
+    padding: 20px;
+    background: #ffffff;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+
 /* Merchant textarea */
 .merchant-textarea {
     width: 100%;
