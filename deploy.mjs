@@ -5,7 +5,7 @@ import { homedir } from 'os';
 // 定义基础路径
 const BASE_PATH = join(
   homedir(),
-  'Library/Mobile Documents/iCloud~md~obsidian/Documents/漂泊者及其影子'
+  '漂泊者及其影子'
 );
 
 const NOTE_DEMO_PATH = join(
@@ -16,24 +16,8 @@ const NOTE_DEMO_PATH = join(
 // 定义所有 vault 的插件目录
 const vaults = [
   {
-    name: 'Mobile',
-    path: join(BASE_PATH, '.obsidian-mobile/plugins/obsidian-accounting')
-  },
-  {
-    name: 'Pro',
-    path: join(BASE_PATH, '.obsidian-pro/plugins/obsidian-accounting')
-  },
-  {
-    name: 'iPad',
-    path: join(BASE_PATH, '.obsidian-ipad/plugins/obsidian-accounting')
-  },
-  {
-    name: '2017',
-    path: join(BASE_PATH, '.obsidian-2017/plugins/obsidian-accounting')
-  },
-  {
-    name: 'Zhang',
-    path: join(BASE_PATH, '.obsidian-zhang/plugins/obsidian-accounting')
+    name: 'Main',
+    path: join(BASE_PATH, '.obsidian/plugins/obsidian-accounting')
   },
   {
     name: 'Note-Demo',
